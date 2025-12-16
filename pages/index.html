@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Dropp Payment Samples</title>
+    <style>
+        * {
+            font-family: system-ui,-apple-system,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol";
+        }
+        html{
+            padding: 30px;
+            background-color: #def8ff;
+        }
+        body{
+            padding: 10px 60px;
+            background-color: #fff;
+            border-radius: 10px;
+            min-height: 400px;
+        }
+        h1{
+            margin-bottom: 7px;
+        }
+        .title-bar{
+            margin-bottom: 50px;
+        }
+        .title{
+            border-bottom: 3px solid black;
+        }
+        .subtitle{
+            font-size: 90%;
+            color: #666;
+        }
+        li{
+            padding: 10px 0;
+            list-style-type: '~  ';
+        }
+        a{
+            padding: 5px 10px;
+        }
+        a, a:visited{
+            color: black;
+            text-decoration: none;
+            border-bottom: 1px dotted black;
+            background-color: #fff;
+        }
+        a:hover{
+            color: black;
+            text-decoration: none;
+            background-color: #def8ff;
+        }
+        a.dropp-payment{
+            padding: 0;
+            border: none;
+        }
+        .pix{
+            /*margin-top: 50px;*/
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            width: fit-content;
+        }
+        button {
+            margin: 20px 0;
+            background-color: #DEF8FF;
+            color: #1bc3ef;
+            border: 1px solid #1bc3ef;
+            padding: 10px;
+            width: 200px;
+            font-size: 110%;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+<div class="title-bar">
+    <div class="title">
+        <h1>Dropp Payment Samples</h1>
+    </div>
+    <p class="subtitle">Showcasing Dropp Payment Methods</p>
+</div>
+
+<ul>
+    <li><a href="pages/single-payment.html" title="Customer paying for a purchase">Single Payment</a></li>
+    <li><a href="pages/single-payment-with-post-callback.html" title="Customer paying for a purchase">Single Payment with POST callback</a></li>
+    <li><a href="pages/redeem.html" title="Merchant paying or crediting the customer">Redeem/Credit Payment</a></li>
+    <li><a href="pages/recurring.html" title="Recurring payments or micro-subscriptions">Recurring Payments / micro-subscriptions</a></li>
+    <li><a href="pages/refund.html" title="Refunding a prior payment transaction">Refund customer for a prior payment transaction</a></li>
+    <li><a href="pages/generate-uuid.html" title="Generate UUID and QR code">Generate UUID</a></li>
+    <li><a href="pages/authorize.html" title="Authorize a sub merchant">Authorize a sub merchant</a></li>
+    <li><a href="pages/single-payment-for-sub-merchant.html" title="Authorize a merchant">Single Payment for Sub Merchant</a></li>
+    <li>
+        <a href="pages/transactions.html" title="Transactions for parent merchant">Transactions for parent merchant</a>
+    </li>
+</ul>
+</body>
+</html>

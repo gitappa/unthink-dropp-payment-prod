@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Dropp Payment Sample: Generate UUID</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        * {
+            font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol";
+        }
+        html {
+            padding: 30px;
+            background-color: #def8ff;
+        }
+        body {
+            padding: 10px 60px;
+            background-color: #fff;
+            border-radius: 10px;
+            min-height: 400px;
+        }
+        h1 {
+            margin-bottom: 7px;
+        }
+        .title-bar {
+            margin-bottom: 50px;
+        }
+        .title {
+            border-bottom: 3px solid black;
+        }
+        .subtitle {
+            font-size: 90%;
+            color: #666;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        input[type="text"],
+        input[type="number"],
+        textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            display: none;
+        }
+        .qr-container {
+            margin-top: 20px;
+            text-align: center;
+        }
+        #qrcode {
+            display: inline-block;
+            padding: 10px;
+            background: white;
+            border-radius: 4px;
+        }
+        .download-btn {
+            margin-top: 10px;
+            background-color: #2196F3;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .download-btn:hover {
+            background-color: #1976D2;
+        }
+    </style>
+</head>
+<body>
+    <div class="title-bar">
+        <h1 class="title">Generate UUID</h1>
+        <div class="subtitle">Generate a UUID for your payment and get a QR code</div>
+    </div>
+
+    <!-- <form id="uuidForm"> -->
+        <div class="form-group">
+            <label for="reference">Reference:</label>
+            <input type="text" id="reference" name="reference" value="DefaultReferenceID123" required>
+        </div>
+        <div class="form-group">
+            <label for="thumbnail">Thumbnail URL:</label>
+            <input type="text" id="thumbnail" name="thumbnail" value="https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/Pixel_geometry_01_Pengo.jpg/400px-Pixel_geometry_01_Pengo.jpg" required>
+        </div>
+        <div class="form-group">
+            <label for="description">Description:</label>
+            <textarea id="description" name="description" required>This is a default description for the payment.</textarea>
+        </div>
+        <div class="form-group">
+            <label for="url">Callback URL:</label>
+            <input type="text" id="url" name="url" value="http://localhost:8000/callback" required>
+            <!-- <input type="text" id="url" name="url" value="http://localhost:8000/post-callback" required> -->
+        </div>
+        <div class="form-group">
+            <label for="amount">Amount:</label>
+            <input type="number" id="amount" name="amount" step="0.01" value="0.1" required>
+        </div>
+        <div class="form-group">
+            <label for="successMessage">Success Message:</label>
+            <input type="text" id="successMessage" name="successMessage" value="Your Custom Message here" required>
+        </div>
+
+        <button onclick="generateUUID(event)">Generate UUID</button>
+        <button onclick="generateUUIDWithPost(event)">Generate UUID with POST callback</button>
+
+        <div style="margin-top: 15px; padding: 10px; background-color: #f0f8ff; border-left: 4px solid #2196F3; border-radius: 4px;">
+            <p style="margin: 0; font-size: 14px; color: #333;">
+                <strong>Note:</strong>
+                <br>• "Generate UUID" uses callback URL: <code><strong>/callback</strong></code>
+                <br>• "Generate UUID with POST callback" uses callback URL: <code><strong>/post-callback</strong></code>
+            </p>
+        </div>
+    <!-- </form> -->
+
+    <div id="result" class="result">
+        <h3>Generated UUID:</h3>
+        <p id="uuid"></p>
+        <p>Dropp App Link: <a id="droppAppLink" href="#" target="_blank"></a></p>
+        <div class="qr-container">
+            <div id="qrcode"></div>
+            <button id="checkStatusBtn" style="margin-top: 10px;">
+                <span id="checkStatusText">Check UUID Status</span>
+                <span id="checkStatusLoader" style="display: none;">Loading...</span>
+            </button>
+            <p id="statusDisplay" style="margin-top: 10px; font-weight: bold;"></p>
+        </div>
+    </div>
+
+    <script>
+        async function fetchUUID(formData) {
+            try {
+                const response = await fetch(`/generate-uuid?paymentDetails=${encodeURIComponent(JSON.stringify(formData))}`);
+                const data = await response.json();
+                console.log("Data: ", data);
+                // if (data.status === 'success' && data.paymentResponse.data) {
+                if (data.responseCode === 0 && data.data) {
+                    // const uuid = data.paymentResponse.data.uuid;
+                    // const link = data.paymentResponse.data.link;
+                    const uuid = data.data.uuid;
+                    const link = data.data.link;
+                    document.getElementById('uuid').textContent = uuid;
+                    document.getElementById('result').style.display = 'block';
+
+                    // Clear previous QR code
+                    document.getElementById('qrcode').innerHTML = '';
+
+                    // Generate QR code using qrcode.js
+                    new QRCode(document.getElementById('qrcode'), {
+                        text: link,
+                        width: 300,
+                        height: 300,
+                        colorDark : "#000000",
+                        colorLight : "#ffffff",
+                        correctLevel : QRCode.CorrectLevel.H // High error correction
+                    });
+
+                    // Clear previous status display
+                    document.getElementById('statusDisplay').textContent = '';
+
+                } else {
+                    alert('Error generating UUID: ' + JSON.stringify(data));
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function generateUUIDWithPost(e) {
+            e.preventDefault();
+            const formData = {
+                reference: document.getElementById('reference').value,
+                thumbnail: document.getElementById('thumbnail').value,
+                description: document.getElementById('description').value,
+                url: document.getElementById('url').value,
+                amount: parseFloat(document.getElementById('amount').value),
+                submitToCallBack: 'post', //  submitToCallBack: 'get' or 'post'
+                successMessage: document.getElementById('successMessage').value // Custom success message
+            };
+            await fetchUUID(formData);
+        }
+
+        async function generateUUID(e) {
+            e.preventDefault();
+
+            const formData = {
+                reference: document.getElementById('reference').value,
+                thumbnail: document.getElementById('thumbnail').value,
+                description: document.getElementById('description').value,
+                url: document.getElementById('url').value,
+                amount: parseFloat(document.getElementById('amount').value),
+                submitToCallBack: 'get', //  submitToCallBack: 'get' or 'post'
+                successMessage: document.getElementById('successMessage').value // Custom success message
+            };
+            await fetchUUID(formData);
+
+        };
+
+        // Event listener for the Check Status button
+        document.getElementById('checkStatusBtn').addEventListener('click', async function() {
+            const uuid = document.getElementById('uuid').textContent;
+            if (!uuid) {
+                alert('Please generate a UUID first.');
+                return;
+            }
+
+            // Show loading state
+            const checkStatusBtn = document.getElementById('checkStatusBtn');
+            const checkStatusText = document.getElementById('checkStatusText');
+            const checkStatusLoader = document.getElementById('checkStatusLoader');
+
+            checkStatusBtn.disabled = true;
+            checkStatusText.style.display = 'none';
+            checkStatusLoader.style.display = 'inline';
+
+            try {
+                // This endpoint needs to be created on the backend
+                const response = await fetch(`/check-uuid-status?uuid=${encodeURIComponent(uuid)}`);
+                const data = await response.json();
+
+                if (data.status === 'success' && data.uuidStatus) {
+                    document.getElementById('statusDisplay').textContent = 'Status: ' + data.uuidStatus;
+                } else {
+                    document.getElementById('statusDisplay').textContent = 'Error checking status: ' + (data.message || JSON.stringify(data));
+                }
+            } catch (error) {
+                document.getElementById('statusDisplay').textContent = 'Error: ' + error.message;
+            } finally {
+                // Hide loading state
+                checkStatusBtn.disabled = false;
+                checkStatusText.style.display = 'inline';
+                checkStatusLoader.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>

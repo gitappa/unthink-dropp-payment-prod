@@ -168,6 +168,10 @@ function processDroppPaymentForSubMerchant(p2p: string | undefined, res: Respons
   const p2pObj = JSON.parse(p2p);
   const invoiceData: IInvoice = JSON.parse(Buffer.from(p2pObj.invoiceBytes, 'base64').toString());
   log(`invoiceData: ${JSON.stringify(invoiceData)}`);
+  if (res){
+    log(`res: ${JSON.stringify(res)}`);
+  }
+  
   log(`Single payment for sub-merchant. Initiating: ${invoiceData.currency} ${invoiceData.amount}, ${invoiceData.walletAddress} --> ${invoiceData.merchantAccount}`);
   droppPayment.processPaymentForSubMerchant(p2pObj, res as any, returnCallback as any);
 }

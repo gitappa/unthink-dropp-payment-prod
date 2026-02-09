@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import * as droppSdk from '../../dropp-sdk-js';
 import { IInvoice } from '../../dropp-sdk-js/dropp-payloads';
-import { createTransactionRecord, updateTransactionRecord, verifyHederaTransaction, extractHederaTransactionId } from '../middleware/utils';
+import { TransactionService, HederaService, CommonService } from '../middleware/utils';
 
 const router = Router();
 
@@ -63,190 +63,172 @@ function returnSuccess(res: Response, data: any): void {
 router.post('/checkout', async (req: Request, res: Response) => {
   log(`Received /checkout request process.env.DROPP_MERCHANT_ID ${process.env.DROPP_MERCHANT_ID}`);
   try {
-    const {
-      amount,
-      currency = 'USD',
-      additional_details={},
-      user_id,
-      store_id,
-      emailId,
-      service_id,
-      thumbnail,
-      merchantAccount = process.env.DROPP_MERCHANT_ID,
-      signingKey = process.env.DROPP_MERCHANT_SIGNING_KEY,
-      distribution,
-      callbackUrl = `${req.protocol}://${req.get('host')}/api/payments/post-callback`,
-      successUrl, // Client success redirect URL
-      failureUrl, // Client failure redirect URL
-      title,
-      type,
-      //description,
-      successMessage,
-      purchaseExpiration,
-      referralFee,
-      referralAccount,
-      acceptPaymentDelay,
-      noOffers,
-      payByCC = true,
-      payByBank = true,
-    } = req.body;
+    log(`req.protocol: ${req.protocol}, req.get('host'): ${req.get('host')}`);
+    //-------------------Validate required fields------------
+    let valid_details = await CommonService.checkoutValidator(req, res);
+    const merchantAccount = req.body.merchantAccount || process.env.DROPP_MERCHANT_ID!;
+    if (valid_details.isValid) {
+      const {
+        amount,
+        currency = 'USD',
+        user_id,
+        store_id,
+        emailId = '',
+        service_id = '',
+        thumbnail,
+        signingKey = process.env.DROPP_MERCHANT_SIGNING_KEY,
+        parent_distribution_share,
+        subParent_distribution_share,
+        //callbackUrl = `${req.protocol}://${req.get('host')}/api/payments/post-callback-v2`,
+        successUrl, // Client success redirect URL
+        failureUrl, // Client failure redirect URL
+        title,
+        type,
+        //description,
+        successMessage,
+        purchaseExpiration,
+        referralFee,
+        referralAccount,
+        acceptPaymentDelay,
+        noOffers,
+        payByCC = true,
+        payByBank = true,
+      } = req.body;
+      
+      //-----------------get correct callback url for single payment or submerchant payment handler------------
+      log(`parent_distribution_share: ${parent_distribution_share}, subParent_distribution_share: ${subParent_distribution_share}`);
+      var getCallbackUrl_details = await CommonService.getCallbackUrl(req, parent_distribution_share, subParent_distribution_share);
+      log(`Using callback URL: ${getCallbackUrl_details.callbackUrl}`);
+      log(`Using distribution: ${JSON.stringify(getCallbackUrl_details.distribution)}`);
+      //-----------------create Unthink transaction record and get reference(unique id) with received data---------------------------------
+      try {
+        const createResp = await TransactionService.create({
+          merchantAccount: merchantAccount,
+          signingKey: signingKey,
+          //thumbnail: thumbnail,
+          payment_status: 'initiated',
+          createdAt: new Date().toISOString(),
+          //callbackUrl: callbackUrl,
+          successUrl: successUrl,
+          failureUrl: failureUrl,
+          user_id: user_id,
+          amount: amount,
+          currency: currency,
+          service_id: service_id,
+          store_id: store_id,
+          emailId: emailId,
+          payment_method: 'dropp',
+          title: title,
+          type: type,
+          //description: description,
+          successMessage: successMessage
+        });
 
-    // Validate required fields
-    let mandatory_fields = [amount, currency, user_id, store_id, emailId, service_id, merchantAccount];
-    for (let field of mandatory_fields) {
-      if (field === undefined || field === null || field === '') {
-        log(`Missing mandatory field in request body :: ${field}`);
-        return returnError(res, 400, `Missing required fields: ${field}`);
+        if (!createResp.ok) {
+          log('Failed to create transaction in MongoDB.');
+          return returnError(res, 500, 'Failed to create transaction record');
+        }
+        var transaction_details = { data: { data: createResp.data } };
+        var reference = transaction_details.data.data.transaction_id;
+      } catch (dbError) {
+        log(`Failed to save checkout details to MongoDB: ${dbError}`);
       }
-    }
 
-    try {
-      const createResp = await createTransactionRecord({
+      //------------------Construct description with additional details-----------------------
+      let buildCustomDescription_details = await CommonService.buildCustomDescription(req, res);
+      let description = buildCustomDescription_details.description;
+      let additional_details = buildCustomDescription_details.additional_details;
+      log(`Checkout request received for merchant ${merchantAccount}, description:: ${description}  type desc :${typeof(description)} amount: ${amount} ${currency}, reference: ${reference}`);
+      
+      //---------------------construct payment request payload-----------------------
+      let paymentRequestPayload = {
         merchantAccount: merchantAccount,
-        signingKey: signingKey,
-        //thumbnail: thumbnail,
-        payment_status: 'initiated',
-        createdAt: new Date().toISOString(),
-        //callbackUrl: callbackUrl,
-        successUrl: successUrl,
-        failureUrl: failureUrl,
-        user_id: user_id,
-        amount: amount,
-        currency: currency,
-        service_id: service_id,
-        store_id: store_id,
-        emailId: emailId,
-        payment_method: 'dropp',
-        title: title,
-        type: type,
-        additional_details:additional_details,
-        //description: description,
-        successMessage: successMessage
-      });
-
-      if (!createResp.ok) {
-        log('Failed to create transaction in MongoDB.');
-        return returnError(res, 500, 'Failed to create transaction record');
-      }
-      var transaction_details = { data: { data: createResp.data } };
-    } catch (dbError) {
-      log(`Failed to save checkout details to MongoDB: ${dbError}`);
-    }
-
-    
-    if (additional_details && Object.keys(additional_details).length > 0) {
-      additional_details.user_id = user_id;
-      additional_details.store_id = store_id;
-      additional_details.emailId = emailId;
-      additional_details.service_id = service_id;
-    }else {
-      let additional_details = {
-        user_id: user_id,
-        store_id: store_id,
-        emailId: emailId,
-        service_id: service_id,
+        amount,
+        currency,
+        reference : reference,                       //unique reference of user "user_id|emailId"
+        description: description || '',  //Description of the payment "order_id|<value>" or "collection_id|<value>" or "mfr_code|<product_id>.
+        thumbnail: thumbnail || '',      //URL to a product image.
+        url: getCallbackUrl_details.callbackUrl,
+        title: title || '',  //Title of the payment request.
+        type: type || '',    //Type of the product (e.g., Video, News). "dothelook|usercheckin_1234"
+        purchaseExpiration: purchaseExpiration || undefined,
+        referralFee: referralFee || undefined,
+        referralAccount: referralAccount || undefined,
+        //distribution: getCallbackUrl_details.distribution || "undefined",
+        acceptPaymentDelay: acceptPaymentDelay || false,
+        noOffers: noOffers || false,
+        // Allow the client/server to request fiat on-ramp options when supported by Dropp
+        payByCC: payByCC ,
+        payByBank: payByBank ,
+        successURL: successUrl || "",
+        failureURL: failureUrl || "",
+        successMessage: successMessage,
+        //successCallbackUrl: successCallbackUrl || "",
+        //failureCallbackUrl: failureCallbackUrl || "",
+        submitToCallBack: 'GET' as const // Use POST for callback (more reliable than GET)
       };
-    }
-    
-    var reference = transaction_details.data.data.transaction_id;
-    //var type = JSON.stringify(additional_details || {})
-    let description = Object.entries(additional_details)
-      .map(([key, val]) => `${key}=${val}`)
-      .join("; ");
-    log(`Checkout request received for merchant ${merchantAccount}, description:: ${description}amount: ${amount} ${currency}, reference: ${reference}`);
-    
-    // Build the payment request payload for the Dropp SDK
-    const paymentRequestPayload = {
-      merchantAccount: merchantAccount,
-      amount,
-      currency,
-      reference : reference,                       //unique reference of user "user_id|emailId"
-      description: description || '',  //Description of the payment "order_id|<value>" or "collection_id|<value>" or "mfr_code|<product_id>.
-      thumbnail: thumbnail || '',      //URL to a product image.
-      url: callbackUrl,
-      title: title || '',  //Title of the payment request.
-      type: type || '',    //Type of the product (e.g., Video, News). "dothelook|usercheckin_1234"
-      purchaseExpiration: purchaseExpiration || undefined,
-      referralFee: referralFee || undefined,
-      referralAccount: referralAccount || undefined,
-      distribution: distribution || undefined,
-      acceptPaymentDelay: acceptPaymentDelay || false,
-      noOffers: noOffers || false,
-      // Allow the client/server to request fiat on-ramp options when supported by Dropp
-      payByCC: payByCC ,
-      payByBank: payByBank ,
-      successURL: successUrl || "",
-      failureURL: failureUrl || "",
-      successMessage: successMessage,
-      //successCallbackUrl: successCallbackUrl || "",
-      //failureCallbackUrl: failureCallbackUrl || "",
-      submitToCallBack: 'POST' as const // Use POST for callback (more reliable than GET)
-  
-    };
-
-    // Call the Dropp SDK to create a checkout and generate UUID
-    const droppClient = new droppSdk.DroppClient(process.env.DROPP_ENVIRONMENT!);
-    const uuidResponse = await droppClient.generateUUID(paymentRequestPayload);
-
-    if (!uuidResponse || uuidResponse.responseCode !== 0 || !uuidResponse.data) {
-      log(`Failed to generate UUID: ${JSON.stringify(uuidResponse)}`);
-      return returnError(res, 500, 'Failed to generate checkout UUID');
-    }
-    log(`UUID generated successfully: ${JSON.stringify(uuidResponse.data)}`);
-    const checkoutId = uuidResponse.data.uuid;
-    const qrCodeUrl = uuidResponse.data.link;
-
-    /*
-    // Store checkout details for later reference
-    if (!checkoutStore[merchantId]) {
-      checkoutStore[merchantId] = {};
-    }
-    checkoutStore[merchantId][checkoutId] = {
-      checkoutId,
-      paymentDetails: paymentRequestPayload,
-      status: 'initiated',
-      createdAt: new Date().toISOString(),
-      callbackUrl,
-      successCallbackUrl, // Store client success redirect URL
-      failureCallbackUrl, // Store client failure redirect URL
-    };
-    */
-    //_-----------ADD REST API POST CALL to add the details to mongoDB-------------
-   
-    try {
-      const updateResp = await updateTransactionRecord(reference, {
-        //paymentDetails: paymentRequestPayload,
-        payment_status: 'dropp_checkout_created',
-        createdAt: new Date().toISOString(),
-        payment_link: qrCodeUrl,
-        payment_id: checkoutId,
-      });
-      if (!updateResp.ok) {
-        log('Failed to update checkout details to MongoDB.');
+      if(getCallbackUrl_details.distribution){
+        (paymentRequestPayload as any).distribution = getCallbackUrl_details.distribution;
       }
-    } catch (dbError) {
-      log(`Failed to save checkout details to MongoDB: ${dbError}`);
+      log(`Payment request payload constructed: ${JSON.stringify(paymentRequestPayload)}`);
+      
+      //----------------Call the Dropp SDK to create a checkout and generate UUID
+      let checkoutId: string | undefined;
+      let qrCodeUrl: string | undefined;
+      try {
+        const droppClient = new droppSdk.DroppClient(process.env.DROPP_ENVIRONMENT!);
+        const uuidResponse = await droppClient.generateUUID(paymentRequestPayload);
+        log(`UUID generated successfully: ${JSON.stringify(uuidResponse)}`);
+        if (uuidResponse.responseCode !== 0) {
+          log(`Failed to generate UUID - responseCode: ${uuidResponse.responseCode}, errors: ${JSON.stringify(uuidResponse.errors)}`);
+          return returnError(res, 500, `Failed to generate checkout UUID - ${uuidResponse.errors?.[0] || 'Unknown error'}`);
+        }
+        if (uuidResponse.responseCode !== 0 || !uuidResponse.data) {
+          log(`Failed to generate UUID: ${JSON.stringify(uuidResponse)}`);
+          return returnError(res, 500, 'Failed to generate checkout UUID');
+        }
+        log(`UUID generated successfully: ${JSON.stringify(uuidResponse.data)}`);
+        checkoutId = uuidResponse.data.uuid;
+        qrCodeUrl = uuidResponse.data.link;
+      } catch (uuidError: any) {
+        log(`Error generating UUID: ${uuidError.message}`);
+      }
+
+      //----------update transaction with payment link and additional details to add the details to mongoDB-------------
+      try {
+        const updateResp = await TransactionService.update(reference, {
+          //paymentDetails: paymentRequestPayload,
+          payment_status: 'dropp_checkout_created',
+          createdAt: new Date().toISOString(),
+          payment_link: qrCodeUrl,
+          payment_id: checkoutId,
+          additional_details: additional_details
+        });
+        if (!updateResp.ok) {
+          log('Failed to update checkout details to MongoDB.');
+        }
+      } catch (dbError) {
+        log(`Failed to save checkout details to MongoDB: ${dbError}`);
+      }
+      //---------------------Build the redirect URL (wallet will redirect to this URL after approval)
+      const redirectUrl = qrCodeUrl || `https://dropp.app.link/checkouts/${checkoutId}?uuid=${checkoutId}`;
+      returnSuccess(res, {
+        checkoutId,
+        redirectUrl,
+        qrCodeUrl,
+        unthink_transactionReference:reference,
+        message: 'Redirect the user to the redirectUrl to complete the payment',
+      });
+    }else{
+      return returnError(res, 400, valid_details.message);
     }
-
-    log(`Checkout created successfully. CheckoutId: ${checkoutId}, QR: ${qrCodeUrl}`);
-
-    // Build the redirect URL (wallet will redirect to this URL after approval)
-    // The wallet will append the p2p object as a query parameter or POST body
-    const redirectUrl = qrCodeUrl || `https://dropp.app.link/checkouts/${checkoutId}?uuid=${checkoutId}`;
-
-    returnSuccess(res, {
-      checkoutId,
-      redirectUrl,
-      qrCodeUrl,
-      unthink_transactionReference:reference,
-      message: 'Redirect the user to the redirectUrl to complete the payment',
-    });
   } catch (error: any) {
     log(`Error in /checkout: ${error.message}`);
     returnError(res, 500, error.message || 'Internal server error');
   }
 });
-
+ 
+ 
 /**
  * POST /api/payments/post-callback
  * 
@@ -315,7 +297,7 @@ router.post('/post-callback', (req: Request, res: Response) => {
         log(`Payment submitted successfully. Response: ${JSON.stringify(paymentResponse)}`);
         
         // Extract Hedera transaction ID (format: 0.0.XXXXX@171234567890)
-        const hederaTxId = extractHederaTransactionId(p2pObj, paymentResponse);
+        const hederaTxId = HederaService.extractTransactionId(p2pObj, paymentResponse);
         if (hederaTxId) {
           log(`Hedera Transaction ID: ${hederaTxId}`);
         }
@@ -396,7 +378,7 @@ router.post('/post-callback', (req: Request, res: Response) => {
  * Query Parameter:
  * ?p2p=<url-encoded JSON string of P2P object>
  */
-router.get('/post-callback', async(req: Request, res: Response) => {
+router.get('/post-callback-v1', async(req: Request, res: Response) => {
   try {
     const p2pParam = req.query.p2p as string;
 
@@ -422,6 +404,9 @@ router.get('/post-callback', async(req: Request, res: Response) => {
       return returnError(res, 400, 'Invalid invoiceBytes encoding');
     }
     log(`Invoice decoded: ${JSON.stringify(invoiceData)}`);
+    log(`Invoice decoded: ${JSON.stringify(invoiceData)}`);
+    log(`Distribution in invoiceData: ${JSON.stringify(invoiceData.distribution)}`);
+    log(`DistributionBytes in p2pObj: ${p2pObj.distributionBytes}`);
     log(`Payment details: ${invoiceData.currency} ${invoiceData.amount}, from ${p2pObj.payer} to ${invoiceData.merchantAccount} transaction_id: ${invoiceData.reference}  `);
 
     const merchantId = invoiceData.merchantAccount;
@@ -442,7 +427,7 @@ router.get('/post-callback', async(req: Request, res: Response) => {
     let failureUrl = '';
     let signingKey = process.env.DROPP_MERCHANT_SIGNING_KEY;
     try {
-      const updateResp = await updateTransactionRecord(invoiceData.reference, {
+      const updateResp = await TransactionService.update(invoiceData.reference, {
         p2pData: p2pObj,
         invoiceData: invoiceData,
         payment_status: 'payment_received',
@@ -467,7 +452,7 @@ router.get('/post-callback', async(req: Request, res: Response) => {
         log(`Payment submitted successfully. Response: ${JSON.stringify(paymentResponse)}`);
 
         // Extract Hedera transaction ID (format: 0.0.XXXXX@171234567890)
-        const hederaTxId = extractHederaTransactionId(p2pObj, paymentResponse);
+        const hederaTxId = HederaService.extractTransactionId(p2pObj, paymentResponse);
         if (hederaTxId) {
           log(`Hedera Transaction ID: ${hederaTxId}`);
         }
@@ -484,7 +469,7 @@ router.get('/post-callback', async(req: Request, res: Response) => {
 
         if (isSuccess){
           try {
-            const updateResp = await updateTransactionRecord(invoiceData.reference, {
+            const updateResp = await TransactionService.update(invoiceData.reference, {
               payment_status: 'completed',
               paymentResponse: paymentResponse,
               hederaTransactionId: hederaTxId,
@@ -533,7 +518,7 @@ router.get('/post-callback', async(req: Request, res: Response) => {
        
         if (failureUrl) {
           try {
-            const updateResp = await updateTransactionRecord(invoiceData.reference, {
+            const updateResp = await TransactionService.update(invoiceData.reference, {
               payment_status: 'failed',
               paymentResponse: paymentError,
             });
@@ -560,6 +545,177 @@ router.get('/post-callback', async(req: Request, res: Response) => {
     returnError(res, 500, error.message || 'Internal server error');
   }
 });
+
+
+
+/**
+ * GET /api/payments/post-callback1
+ * 
+ * Alternative callback handler for GET-based callbacks with sub-merchant support.
+ * Checks for distribution data and uses submitForSubMerchant if present.
+ * The wallet will append the p2p object as a URL-encoded query parameter.
+ * 
+ * Query Parameter:
+ * ?p2p=<url-encoded JSON string of P2P object>
+ */
+router.get('/post-callback-v2', async(req: Request, res: Response) => {
+  try {
+    const p2pParam = req.query.p2p as string;
+
+    if (!p2pParam) {
+      return returnError(res, 400, 'Missing p2p query parameter');
+    }
+
+    // Parse the p2p JSON string
+    let p2pObj: droppSdk.IPromiseToPay;
+    try {
+      p2pObj = JSON.parse(p2pParam);
+    } catch (parseError: any) {
+      return returnError(res, 400, `Invalid p2p JSON: ${parseError.message}`);
+    }
+    log(`p2p object parsed successfully :: ${JSON.stringify(p2pObj)}`);
+    log(`GET callback1 received from payer: ${p2pObj.payer}`);
+
+    // Decode and process payment (same as POST callback)
+    let invoiceData: IInvoice;
+    try {
+      invoiceData = JSON.parse(Buffer.from(p2pObj.invoiceBytes, 'base64').toString());
+    } catch (decodeError: any) {
+      return returnError(res, 400, 'Invalid invoiceBytes encoding');
+    }
+    log(`Invoice decoded: ${JSON.stringify(invoiceData)}`);
+    log(`Distribution in invoiceData: ${JSON.stringify(invoiceData.distribution)}`);
+    log(`DistributionBytes in p2pObj: ${p2pObj.distributionBytes}`);
+    log(`Payment details: ${invoiceData.currency} ${invoiceData.amount}, from ${p2pObj.payer} to ${invoiceData.merchantAccount} transaction_id: ${invoiceData.reference}  `);
+
+    const merchantId = invoiceData.merchantAccount;
+    const checkoutId = invoiceData.qrCodeUUID || (p2pObj as any).checkoutId;
+
+    let successUrl = '';
+    let failureUrl = '';
+    let signingKey = process.env.DROPP_MERCHANT_SIGNING_KEY;
+    try {
+      const updateResp = await TransactionService.update(invoiceData.reference, {
+        p2pData: p2pObj,
+        invoiceData: invoiceData,
+        payment_status: 'payment_received',
+      });
+      if (updateResp.ok) {
+        successUrl = updateResp.successUrl || '';
+        failureUrl = updateResp.failureUrl || '';
+        signingKey = updateResp.signingKey || signingKey; 
+      } else {
+        log('Failed to update checkout details to MongoDB.');
+      }
+    } catch (dbError) {
+      log(`Failed to save payment_received details to MongoDB: ${dbError}`);
+    }
+
+    const droppClient = new droppSdk.DroppClient(process.env.DROPP_ENVIRONMENT!);
+    log(`Using signing key: ${signingKey}`);
+
+    // Check if this is a sub-merchant payment (has distribution data)
+    const isSubMerchantPayment = invoiceData.distribution || p2pObj.distributionBytes;
+    const parentMerchantId = process.env.DROPP_PARENT_MERCHANT_ID || process.env.DROPP_MERCHANT_ID!;
+
+    let paymentPromise: Promise<droppSdk.DroppResponse>;
+    if (Object.keys(isSubMerchantPayment).length > 0) {
+      log(`Submitting sub-merchant payment for parent merchant: ${parentMerchantId}`);
+      paymentPromise = new droppSdk.DroppPaymentRequest(droppClient)
+        .submitForSubMerchant(p2pObj, signingKey, parentMerchantId);
+    } else {
+      log(`Submitting regular merchant payment`);
+      paymentPromise = new droppSdk.DroppPaymentRequest(droppClient)
+        .submit(p2pObj, signingKey);
+    }
+
+    paymentPromise
+      .then(async (paymentResponse: droppSdk.DroppResponse) => {
+        log(`Payment submitted successfully. Response: ${JSON.stringify(paymentResponse)}`);
+
+        // Extract Hedera transaction ID (format: 0.0.XXXXX@171234567890)
+        const hederaTxId = HederaService.extractTransactionId(p2pObj, paymentResponse);
+        if (hederaTxId) {
+          log(`Hedera Transaction ID: ${hederaTxId}`);
+        }
+
+        const isSuccess = paymentResponse.responseCode === 0;
+        const redirectUrl = isSuccess ? successUrl : failureUrl;
+
+        if (isSuccess){
+          try {
+            const updateResp = await TransactionService.update(invoiceData.reference, {
+              payment_status: 'completed',
+              paymentResponse: paymentResponse,
+              hederaTransactionId: hederaTxId,
+            });
+            if (updateResp.ok) {
+              log('updated checkout complete to MongoDB.');
+            }
+          } catch (dbError) {
+            log(`Failed to save payment_received details to MongoDB: ${dbError}`);
+          }
+        }
+       
+        if (redirectUrl) {
+          const redirectUrlWithParams = new URL(redirectUrl);
+          redirectUrlWithParams.searchParams.append('checkoutId', checkoutId);
+          redirectUrlWithParams.searchParams.append('status', isSuccess ? 'success' : 'failed');
+          redirectUrlWithParams.searchParams.append('reference', invoiceData.reference);
+          redirectUrlWithParams.searchParams.append('amount', invoiceData.amount.toString());
+          redirectUrlWithParams.searchParams.append('currency', invoiceData.currency);
+          redirectUrlWithParams.searchParams.append('payer', p2pObj.payer);
+          redirectUrlWithParams.searchParams.append('paymentRef', paymentResponse.data.paymentRef);
+          redirectUrlWithParams.searchParams.append('transactionReference', paymentResponse.data.transactionReference);
+          if (hederaTxId) {
+            redirectUrlWithParams.searchParams.append('hederaTransactionId', hederaTxId);
+          }
+
+          log(`Redirecting to ${isSuccess ? 'success' : 'failure'} callback URL: ${redirectUrlWithParams.toString()}`);
+          return res.redirect(redirectUrlWithParams.toString());
+        }
+
+        returnSuccess(res, {
+          paymentStatus: paymentResponse.responseCode === 0 ? 'success' : 'failed',
+          paymentResponse,
+          invoiceData,
+          checkoutId,
+          hederaTransactionId: hederaTxId || null,
+        });
+      })
+      .catch(async (paymentError: any) => {
+        log(`Payment submission failed: ${JSON.stringify(paymentError)}`);
+       
+        if (failureUrl) {
+          try {
+            const updateResp = await TransactionService.update(invoiceData.reference, {
+              payment_status: 'failed',
+              paymentResponse: paymentError,
+            });
+            if (updateResp.ok) {
+              log('updated checkout complete to MongoDB.');
+            }
+          } catch (dbError) {
+            log(`Failed to save payment_received details to MongoDB: ${dbError}`);
+          }
+          const redirectUrl = new URL(failureUrl);
+          redirectUrl.searchParams.append('checkoutId', checkoutId);
+          redirectUrl.searchParams.append('status', 'failed');
+          redirectUrl.searchParams.append('reference', invoiceData.reference);
+          redirectUrl.searchParams.append('error', paymentError.message || 'Payment processing failed');
+
+          log(`Redirecting to failure callback URL: ${redirectUrl.toString()}`);
+          return res.redirect(redirectUrl.toString());
+        }
+
+        returnError(res, 500, `Payment processing failed: ${paymentError.message || JSON.stringify(paymentError)}`);
+      });
+  } catch (error: any) {
+    log(`Error in /post-callback1: ${error.message}`);
+    returnError(res, 500, error.message || 'Internal server error');
+  }
+});
+
 
 /**
  * GET /api/payments/status/:checkoutId
@@ -637,64 +793,6 @@ router.get('/status/:checkoutId', async (req: Request, res: Response) => {
 
 
 /**
- * POST /api/payments/verify-hedera
- * 
- * Verify a Dropp payment on Hedera chain directly
- * Accepts the payment proof/transaction ID from the client
- * 
- * Request Body:
- * {
- *   "transactionId": "0.0.XXXXX@171234567890",
- *   "checkoutId": "uuid-xxx" (optional, for linking to checkout)
- * }
- * 
- * Response:
- * {
- *   "success": true,
- *   "verified": true,
- *   "transactionId": "0.0.XXXXX@171234567890",
- *   "data": {...transaction details from Mirror Node...}
- * }
- */
-router.post('/verify-hedera', async (req: Request, res: Response) => {
-  try {
-    const { transactionId, checkoutId } = req.body;
-
-    if (!transactionId) {
-      return returnError(res, 400, 'Missing transactionId in request body');
-    }
-
-    log(`Hedera verification request for transaction: ${transactionId}, checkoutId: ${checkoutId || 'N/A'}`);
-
-    const verificationResult = await verifyHederaTransaction(transactionId);
-
-    if (!verificationResult.verified) {
-      return returnError(res, 400, `Verification failed: ${verificationResult.error}`);
-    }
-
-    // If checkoutId provided, update the checkout store with verification result
-    if (checkoutId) {
-      const merchantId = (req.query.merchantId as string) || process.env.DROPP_MERCHANT_ID!;
-      if (checkoutStore[merchantId] && checkoutStore[merchantId][checkoutId]) {
-        checkoutStore[merchantId][checkoutId].hederaVerified = true;
-        checkoutStore[merchantId][checkoutId].hederaTransactionId = transactionId;
-        checkoutStore[merchantId][checkoutId].hederaVerificationData = verificationResult.data;
-      }
-    }
-
-    returnSuccess(res, {
-      verified: true,
-      transactionId,
-      checkoutId: checkoutId || null,
-      data: verificationResult.data,
-    });
-  } catch (error: any) {
-    log(`Error in /verify-hedera: ${error.message}`);
-    returnError(res, 500, error.message || 'Internal server error');
-  }
-});
-
-/**
  * GET /api/payments/verify-hedera/:transactionId
  * 
  * Verify a Hedera transaction using URL parameter
@@ -721,7 +819,7 @@ router.get('/verify-hedera/:transactionId', async (req: Request, res: Response) 
 
     log(`Hedera verification request (GET) for transaction: ${transactionId}`);
 
-    const verificationResult = await verifyHederaTransaction(transactionId);
+    const verificationResult = await HederaService.verifyHederaTransaction(transactionId);
 
     if (!verificationResult.verified) {
       return returnError(res, 400, `Verification failed: ${verificationResult.error}`);
@@ -816,7 +914,7 @@ router.get('/transactions/:merchantId', async (req: Request, res: Response) => {
   }
 });
 
-export default router;
+
 
 // Debug endpoint: GET /api/payments/debug/:uuid
 // Returns the SDK status for a UUID to help inspect what payment options/back-end data exist for the generated checkout.
@@ -879,3 +977,379 @@ router.post('/debug/decode-transfer', async (req: Request, res: Response) => {
     returnError(res, 500, err?.message || 'Internal server error');
   }
 });
+
+router.post('/get-authorize-url', async (req: Request, res: Response) => {
+  try {
+    const { user_id, emailId } = req.body;
+
+    if (!(user_id || emailId)) {
+      return returnError(res, 400, 'Missing user_id or emailId');
+    }
+
+    log(`Generating authorize URL for user: ${user_id}`);
+
+    const droppClient = new droppSdk.DroppClient(process.env.DROPP_ENVIRONMENT!);
+    const parentMerchantId = process.env.DROPP_PARENT_MERCHANT_ID || process.env.DROPP_MERCHANT_ID!;
+    //const myCallbackUrl = `${req.protocol}://${req.get('host')}/api/payments/authorize-callback`;
+    try {
+      // Get the authorization URL from Dropp SDK
+      const authorizeUrl = droppClient.getUrlForSubMerchantAuthorization(parentMerchantId);
+      
+      log(`Authorization URL generated: ${authorizeUrl}`);
+
+      // Store session mapping (user_id -> state, for security)
+      const sessionId = `session_${user_id}_${Date.now()}`;
+      checkoutStore[user_id] = checkoutStore[user_id] || {};
+      checkoutStore[user_id][sessionId] = {
+        status: 'pending_authorization',
+        email: emailId,
+        createdAt: new Date().toISOString(),
+      };
+
+      log(`Session created: ${sessionId} for user: ${user_id}`);
+
+      returnSuccess(res, {
+        success: true,
+        authorizeUrl: authorizeUrl,
+        sessionId: sessionId,
+      });
+    } catch (sdkError: any) {
+      log(`Failed to get authorization URL: ${sdkError.message}`);
+      return returnError(res, 500, `Failed to get authorization URL: ${sdkError.message}`);
+    }
+  } catch (error: any) {
+    log(`Error in /get-authorize-url: ${error.message}`);
+    returnError(res, 500, error.message || 'Internal server error');
+  }
+});
+
+const activeSessions = new Map<string, any>();
+
+
+
+
+/*=======================index.html page connected with below few handler for callback logic====
+  /**
+   * GET /api/payments/authorize-callback
+   * 
+   * IMPORTANT: Configure this URL in Dropp Dashboard as your "Redirect URL"
+   * When user authorizes on Dropp portal, Dropp redirects here.
+   * This route sends the merchant ID back to the opener window via postMessage.
+   * 
+   * Expected Query Parameters from Dropp:
+   * ?merchantId=0.0.XXXXXX&status=success (or error/failed/cancelled)
+   */
+/*
+router.get('/authorize-callback', (req: Request, res: Response): void => {
+  try {
+    const { merchantId, status, error } = req.query;
+
+    log(`[AUTHORIZE-CALLBACK] status: ${status}, merchantId: ${merchantId}, error: ${error}`);
+    log(`[AUTHORIZE-CALLBACK] Full query params: ${JSON.stringify(req.query)}`);
+
+    // Error case
+    if (error || status === 'failed' || status === 'cancelled') {
+      const errorMsg = error || 'Authorization was cancelled or failed';
+      log(`[AUTHORIZE-CALLBACK] Authorization failed: ${errorMsg}`);
+      
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>Authorization Failed</title>
+          <style>
+            body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #f0f0f0; margin: 0; }
+            .message { background: #fff; padding: 40px; border-radius: 8px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+            .error { color: #d32f2f; font-size: 16px; margin-bottom: 20px; }
+          </style>
+        </head>
+        <body>
+          <div class="message">
+            <p class="error">❌ Authorization Failed</p>
+            <p>${errorMsg}</p>
+            <p><small>This window will close automatically...</small></p>
+          </div>
+          <script>
+            console.log('[POPUP] Authorization failed, sending message to opener...');
+            if (window.opener && !window.opener.closed) {
+              window.opener.postMessage({ 
+                type: 'DROPP_AUTH_ERROR',
+                error: '${errorMsg}',
+                status: '${status}'
+              }, '*');
+              console.log('[POPUP] Error message sent to opener');
+            } else {
+              console.log('[POPUP] No opener window available');
+            }
+            setTimeout(() => window.close(), 2000);
+          </script>
+        </body>
+        </html>
+      `;
+      res.send(html);
+      return;
+    }
+
+    // Success case: User authorized and we have their merchant ID
+    if (status === 'success' && merchantId) {
+      log(`[AUTHORIZE-CALLBACK] Authorization successful - merchantId: ${merchantId}`);
+      
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>Authorization Successful</title>
+          <style>
+            body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #f0f0f0; margin: 0; }
+            .message { background: #fff; padding: 40px; border-radius: 8px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+            .success { color: #2e7d32; font-size: 16px; margin-bottom: 20px; }
+            .merchant-id { background: #f5f5f5; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px; word-break: break-all; }
+          </style>
+        </head>
+        <body>
+          <div class="message">
+            <p class="success">✅ Authorization Successful!</p>
+            <p>Merchant ID: <div class="merchant-id">${merchantId}</div></p>
+            <p><small>Sending details to main window...</small></p>
+          </div>
+          <script>
+            console.log('[POPUP] Authorization successful, merchantId: ${merchantId}');
+            console.log('[POPUP] window.opener:', window.opener);
+            console.log('[POPUP] window.opener.closed:', window.opener?.closed);
+            
+            if (window.opener && !window.opener.closed) {
+              console.log('[POPUP] Sending DROPP_AUTH_SUCCESS to opener...');
+              window.opener.postMessage({ 
+                type: 'DROPP_AUTH_SUCCESS',
+                merchantId: '${merchantId}',
+                status: 'approved'
+              }, '*');
+              console.log('[POPUP] Message sent successfully');
+            } else {
+              console.error('[POPUP] Cannot reach opener window');
+              alert('Failed to communicate with main window. Please refresh and try again.');
+            }
+            
+            // Close popup after a short delay
+            setTimeout(() => window.close(), 1500);
+          </script>
+        </body>
+        </html>
+      `;
+      res.send(html);
+      return;
+    }
+
+    // Unexpected parameters
+    log(`[AUTHORIZE-CALLBACK] Invalid parameters - no merchantId or success status`);
+    res.status(400).send(`
+      <!DOCTYPE html>
+      <html>
+      <head><title>Invalid Request</title></head>
+      <body style="font-family: Arial; text-align: center; padding: 40px;">
+        <h2>❌ Invalid Authorization Request</h2>
+        <p>Missing required parameters: merchantId and status=success</p>
+        <p>Query params received: ${JSON.stringify(req.query)}</p>
+      </body>
+      </html>
+    `);
+  } catch (error: any) {
+    log(`Error in /authorize-callback: ${error.message}`);
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html>
+      <head><title>Server Error</title></head>
+      <body style="font-family: Arial; text-align: center; padding: 40px;">
+        <h2>❌ Server Error</h2>
+        <p>${error.message}</p>
+      </body>
+      </html>
+    `);
+  }
+});*/
+
+/**
+ * POST /api/payments/link-merchant-account
+ * * Called by your Frontend after it successfully receives the ID from the popup.
+ * This is where you save the association in your database.
+ */
+/*
+router.post('/link-merchant-account', async (req: Request, res: Response) => {
+  try {
+    const { user_id, email, merchantId, sessionId } = req.body;
+
+    if (!user_id || !merchantId) {
+      return returnError(res, 400, 'Missing user_id or merchantId');
+    }
+
+    log(`Linking User ${user_id} to Dropp Merchant ${merchantId}`);
+
+    // Verify the session exists and is valid
+    if (sessionId && checkoutStore[user_id]?.[sessionId]) {
+      checkoutStore[user_id][sessionId].status = 'authorized';
+      checkoutStore[user_id][sessionId].merchantId = merchantId;
+      log(`Session ${sessionId} updated with merchantId`);
+    }
+    returnSuccess(res, { 
+      success: true,
+        message: 'Merchant account linked successfully',
+        merchantId: merchantId,
+        user_id: user_id,
+    });
+
+  } catch (error: any) {
+    log(`Error linking merchant: ${error.message}`);
+    returnError(res, 500, 'Failed to link merchant account');
+  }
+});
+
+router.get('/get-merchant-account/:userId', async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      return returnError(res, 400, 'Missing userId');
+    }
+
+    log(`Fetching merchant account for user: ${userId}`);
+
+    // Get from in-memory store first
+    if (checkoutStore[userId]) {
+      const sessions = checkoutStore[userId];
+      const authorizedSession = Object.values(sessions).find(
+        (session: any) => session.status === 'authorized' && session.merchantId
+      );
+      
+      if (authorizedSession) {
+        return returnSuccess(res, {
+          merchantId: (authorizedSession as any).merchantId,
+          email: (authorizedSession as any).email,
+          status: 'authorized',
+        });
+      }
+    }
+
+    return returnError(res, 404, 'No merchant account linked for this user');
+  } catch (error: any) {
+    log(`Error in /get-merchant-account: ${error.message}`);
+    returnError(res, 500, error.message || 'Internal server error');
+  }
+});*/
+
+/*=======================index-test.html page connected with below few handler for callback logic====
+  
+interface ConnectSession {
+    status: 'pending' | 'connected' | 'failed';
+    sessionId: string;
+    merchantId?: string;
+    createdAt: number;
+}
+const connectStore: Record<string, ConnectSession> = {};
+
+/**
+ * 1. POST /api/payments/wallet/connect
+ * Generates a unique session and a QR-compatible URL.
+ */
+/*
+router.post('/wallet/connect', (req: Request, res: Response) => {
+    try {
+        const droppClient = new droppSdk.DroppClient(process.env.DROPP_ENVIRONMENT!);
+        const parentMerchantId = process.env.DROPP_PARENT_MERCHANT_ID || process.env.DROPP_MERCHANT_ID!;
+        
+        // Generate a unique session ID
+        const sessionId = `wc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+        // Construct the Callback URL (Where Dropp will redirect the mobile phone after approval)
+        // Ensure 'req.get("host")' is your public domain (e.g., via ngrok if local)
+        const protocol = req.protocol === 'http' && !req.get('host')?.includes('localhost') ? 'https' : req.protocol;
+        const myCallbackUrl = `${protocol}://${req.get('host')}/api/payments/wallet/callback?sessionId=${sessionId}`;
+
+        // Get the base Authorization URL from SDK
+        let authUrl = droppClient.getUrlForSubMerchantAuthorization(parentMerchantId);
+
+        // Append our dynamic callback URL so we can track the session ID when they return
+        // Note: This relies on Dropp supporting a redirectUrl parameter. 
+        // If not supported natively by SDK method, we append it manually.
+        const separator = authUrl.includes('?') ? '&' : '?';
+        const finalConnectUrl = `${authUrl}${separator}redirectUrl=${encodeURIComponent(myCallbackUrl)}`;
+
+        // Save session to store
+        connectStore[sessionId] = {
+            status: 'pending',
+            sessionId: sessionId,
+            createdAt: Date.now()
+        };
+
+        console.log(`[WALLET-CONNECT] Session created: ${sessionId}`);
+        console.log(`[WALLET-CONNECT] URL: ${finalConnectUrl}`);
+
+        res.json({
+            success: true,
+            sessionId: sessionId,
+            connectUrl: finalConnectUrl
+        });
+
+    } catch (error: any) {
+        console.error(`[WALLET-CONNECT] Error: ${error.message}`);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});*/
+
+/**
+ * 2. GET /api/payments/wallet/callback
+ * Handled when the Mobile App redirects back to the server.
+ */
+/*
+router.get('/wallet/callback', (req: Request, res: Response) => {
+    const { sessionId, merchantId, status, error } = req.query;
+
+    console.log(`[WALLET-CONNECT] Callback received. Session: ${sessionId}, Merchant: ${merchantId}`);
+
+    if (!sessionId || typeof sessionId !== 'string') {
+        return res.status(400).send("Missing Session ID");
+    }
+
+    if (connectStore[sessionId]) {
+        if (merchantId && status !== 'failed') {
+            // Update the session - The polling frontend will pick this up
+            connectStore[sessionId].status = 'connected';
+            connectStore[sessionId].merchantId = merchantId as string;
+            
+            // Return a nice success page for the mobile user
+            return res.send(`
+                <html>
+                <body style="font-family:sans-serif; text-align:center; padding:50px;">
+                    <h1 style="color:green;">✅ Connected!</h1>
+                    <p>You have successfully connected Account: <b>${merchantId}</b></p>
+                    <p>Check your desktop screen.</p>
+                    <script>setTimeout(() => window.close(), 3000);</script>
+                </body>
+                </html>
+            `);
+        } else {
+            connectStore[sessionId].status = 'failed';
+            return res.send(`<h1 style="color:red;">❌ Connection Failed</h1><p>${error || 'Unknown error'}</p>`);
+        }
+    } else {
+        return res.status(404).send("Session expired or not found.");
+    }
+});*/
+
+/**
+ * POST /api/payments/wallet/connected
+ * 
+ * Called by frontend after user connects wallet.
+ * Saves the merchant account connection to the session/database.
+ */
+
+/**
+ * GET /api/payments/wallet/status/:sessionId
+ * 
+ * Polled by the frontend to check if the user has connected their wallet.
+ * Returns the current status and merchantId if connected.
+ */
+
+
+export default router;

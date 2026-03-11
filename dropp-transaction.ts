@@ -1,5 +1,5 @@
-//import * as droppSdk from './dropp-sdk-js';
-import * as droppSdk from 'dropp-sdk-js';
+import * as droppSdk from './dropp-sdk-js';
+//import * as droppSdk from 'dropp-sdk-js';
 import { ServerResponse } from 'http';
 import { DroppResponse } from './dropp-sdk-js/dropp-response';
 import { TransactionRequest } from './dropp-sdk-js/dropp-transaction-payloads';

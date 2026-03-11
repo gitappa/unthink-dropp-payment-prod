@@ -5,14 +5,14 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
-//import * as droppSdk from './dropp-sdk-js';
+import * as droppSdk from './dropp-sdk-js';
 import * as droppPayment from './dropp-payment';
-import * as droppSdk from 'dropp-sdk-js';
+//import * as droppSdk from 'dropp-sdk-js';
 
 import * as droppTransaction from './dropp-transaction';
 import paymentRoutes from './src/routes/payment-routes';
-//import { IInvoice } from './dropp-sdk-js/dropp-payloads';
-import { IInvoice } from 'dropp-sdk-js/dropp-payloads';
+import { IInvoice } from './dropp-sdk-js/dropp-payloads';
+//import { IInvoice } from 'dropp-sdk-js/dropp-payloads';
 
 dotenv.config();
 
@@ -54,6 +54,10 @@ app.get('/health', (req: Request, res: Response) => {
     timestamp: new Date().toISOString(),
     environment: process.env.DROPP_ENVIRONMENT || 'development'
   });
+});
+
+app.get('/wallet-test', (req, res) => {
+  res.sendFile(path.join(__dirname, '../src/page/app.jsx'));
 });
 
 // Register payment routes (REST API endpoints for dynamic payments)

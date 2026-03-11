@@ -1,0 +1,89 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Outfit', sans-serif;
+}
+
+body {
+    background-color: #0f172a; /* Deep background color */
+    color: #ffffff;
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+#root {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Abstract Background Pattern mimic */
+body::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle at 20% 30%, rgba(79, 70, 229, 0.4) 0%, transparent 50%),
+                radial-gradient(circle at 80% 70%, rgba(147, 51, 234, 0.4) 0%, transparent 50%),
+                radial-gradient(circle at 50% 50%, rgba(219, 39, 119, 0.2) 0%, transparent 70%);
+    z-index: -1;
+    filter: blur(40px);
+}
+
+/* Glassmorphism Card Base */
+.glass-card {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    padding: 40px;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    width: 100%;
+    max-width: 500px;
+}
+
+.gradient-button {
+    background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #d946ef 100%);
+    color: white;
+    border: none;
+    padding: 14px 28px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 16px;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+    width: 100%;
+}
+
+.gradient-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 20px -5px rgba(168, 85, 247, 0.5);
+}
+
+.gradient-button:active {
+    transform: translateY(0);
+}
+
+.text-input {
+    background: white;
+    border: none;
+    border-radius: 10px;
+    padding: 15px;
+    width: 100%;
+    color: #1e293b;
+    font-size: 16px;
+}
+
+.label-text {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 14px;
+    margin-bottom: 8px;
+    display: block;
+}

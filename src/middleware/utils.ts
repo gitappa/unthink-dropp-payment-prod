@@ -220,10 +220,10 @@ export class CommonService {
     return {isValid, message}
   }
 
-  static async getCallbackUrl(req: any, parent_distribution_share?: any, subParent_distribution_share?: any): Promise<{ callbackUrl: string, distribution: string | undefined }> {
+  static async getCallbackUrl(req: any, parent_distribution_share?: any, subParent_distribution_share?: any, subMerchantAccount?: string): Promise<{ callbackUrl: string, distribution: string | undefined }> {
     console.log(`Inside getCallbackUrl function request protocol: ${req.protocol} request host:${req.get('host')}`);
     const protocol = process.env.PROTOCOL || req.protocol;
-    const host = req.get('host') || 'unthink-dropp-payment-stage-314035436999.us-central1.run.app';
+    const host = req.get('host') || 'unthink-dropp-payment-prod-314035436999.us-central1.run.app';
     const baseUrl = `${protocol}://${host}/api/payments`;
     let distribution_obj: any = {};
     let distribution: string | undefined = undefined;
@@ -234,7 +234,7 @@ export class CommonService {
         log(`parentMerchantdistribution_share: ${parent_parsedShare}}`);
     }
     if (req.body.hasOwnProperty('subParent_distribution_share') && subParent_distribution_share && (typeof subParent_distribution_share === 'number' || !isNaN(parseFloat(subParent_distribution_share)))) {
-        var DROPP_SUB_PARENT_MERCHANT_ID = process.env.DROPP_SUB_PARENT_MERCHANT_ID;
+        var DROPP_SUB_PARENT_MERCHANT_ID = subMerchantAccount || process.env.DROPP_SUB_PARENT_MERCHANT_ID;
         const subParent_parsedShare = typeof subParent_distribution_share === 'string' ? parseFloat(subParent_distribution_share) : subParent_distribution_share;
         distribution_obj[DROPP_SUB_PARENT_MERCHANT_ID] = subParent_parsedShare;
         log(`subMerchantdistribution_share: ${subParent_parsedShare}}`);

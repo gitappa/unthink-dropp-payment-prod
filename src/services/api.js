@@ -3,8 +3,9 @@
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 import axios from 'axios';
+const env = loadEnv(mode, process.cwd(), '');
 const api = axios.create({
-  baseURL: 'https://auraprod.unthink.ai',
+  baseURL: env.DJANGO_BASE_URL || 'https://auraprod.unthink.ai',
 });
 export const getFullUserInfo = async (email) => {
   try {

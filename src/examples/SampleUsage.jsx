@@ -13,10 +13,10 @@ const SampleUsage = () => {
         loginWithEmail,     // Direct Login / Redirect
         disconnectWallet
     } = useDroppWallet({
-        merchantId: import.meta.env.VITE_DROPP_MERCHANT_ID || '0.0.9763153',
-        environment: import.meta.env.VITE_DROPP_ENVIRONMENT || 'PROD',
+        merchantId: import.meta.env.VITE_DROPP_MERCHANT_ID || '0.0.6784854',
+        environment: import.meta.env.VITE_DROPP_ENVIRONMENT || 'SANDBOX',
         //apiBaseUrl: window.location.origin.includes('localhost') ? 'http://localhost:8080' : ''
-        apiBaseUrl: 'https://unthink-dropp-payment-prod-314035436999.us-central1.run.app'
+        apiBaseUrl: import.meta.env.VITE_DROPP_API_BASE_URL || 'https://unthink-dropp-payment-stage-314035436999.us-central1.run.app'
     });
 
     const handleQrConnect = async () => {

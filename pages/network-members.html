@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>Dropp Sample: Get Network Members</title>
+  <style>
+    * {
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol";
+    }
+    html {
+      padding: 30px;
+      background-color: #def8ff;
+    }
+    body {
+      padding: 10px 60px;
+      background-color: #fff;
+      border-radius: 10px;
+      min-height: 400px;
+    }
+    h1 {
+      margin-bottom: 7px;
+    }
+    .title-bar {
+      margin-bottom: 50px;
+    }
+    .title {
+      border-bottom: 3px solid black;
+    }
+    .subtitle {
+      font-size: 90%;
+      color: #666;
+    }
+    .form-group {
+      margin-bottom: 15px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+    input[type="text"],
+    input[type="number"],
+    input[type="datetime-local"] {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-sizing: border-box;
+      font-size: 14px;
+    }
+    input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+      cursor: pointer;
+    }
+    button {
+      background-color: #4CAF50;
+      color: white;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+    .result {
+      margin-top: 20px;
+      padding: 20px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background-color: #f9f9f9;
+      font-size: 14px;
+      max-height: 600px;
+      overflow-y: auto;
+    }
+    .result-summary {
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;
+      margin-bottom: 20px;
+      white-space: normal;
+    }
+    .result-summary h3 {
+      margin: 0 0 10px 0;
+      color: #4CAF50;
+    }
+    .result-summary p {
+      margin: 5px 0;
+      font-size: 14px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;
+      font-size: 14px;
+      background-color: white;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    table th {
+      background-color: #4CAF50;
+      color: white;
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    table th:nth-child(1),
+    table th:nth-child(5) {
+      text-align: center;
+    }
+    table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #ddd;
+      word-break: break-word;
+    }
+    table td:nth-child(1) {
+      width: 40px;
+      text-align: center;
+    }
+    table td:nth-child(3),
+    table td:nth-child(4) {
+      max-width: 150px;
+    }
+    table td:nth-child(5) {
+      width: 80px;
+      text-align: center;
+    }
+    table td:nth-child(6),
+    table td:nth-child(7),
+    table td:nth-child(8) {
+      font-size: 12px;
+      width: 140px;
+    }
+    table tr:hover {
+      background-color: #f5f5f5;
+    }
+    table tr:last-child td {
+      border-bottom: none;
+    }
+    .pagination-hint {
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;
+      background-color: #e3f2fd;
+      padding: 10px;
+      border-radius: 4px;
+      margin: 10px 0;
+      font-size: 14px;
+    }
+    .raw-json {
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 2px solid #ddd;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .status-badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .status-active {
+      background-color: #d4edda;
+      color: #155724;
+    }
+    .status-inactive {
+      background-color: #f8d7da;
+      color: #721c24;
+    }
+    small {
+      display: block;
+      margin-top: 3px;
+      color: #666;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="title-bar">
+    <h1 class="title">Get Network Members</h1>
+    <div class="subtitle">Fetch network members for a merchant within a time range</div>
+  </div>
+
+  <form id="networkMembersForm">
+    <div class="form-group">
+      <label for="from">From Date:</label>
+      <input type="datetime-local" id="from" name="from" required value="2025-02-18T00:00">
+      <small>Start of lastAssociationTime filter window</small>
+    </div>
+
+    <div class="form-group">
+      <label for="to">To Date:</label>
+      <input type="datetime-local" id="to" name="to" value="2025-02-19T00:00">
+      <small>End of filter window (optional, defaults to now)</small>
+    </div>
+
+    <div class="form-group">
+      <label for="offset">Offset:</label>
+      <input type="number" id="offset" name="offset" value="0" min="0">
+      <small>0-based page start (defaults to 0)</small>
+    </div>
+
+    <div class="form-group">
+      <label for="limit">Limit:</label>
+      <input type="number" id="limit" name="limit" value="10" min="1">
+      <small>Maximum number of members to return</small>
+    </div>
+
+    <button type="submit">Fetch Network Members</button>
+  </form>
+
+  <div class="result" id="result" style="display: none;"></div>
+
+  <script>
+    document.getElementById('networkMembersForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const fromValue = document.getElementById('from').value;
+      const toValue = document.getElementById('to').value;
+      const offset = parseInt(document.getElementById('offset').value, 10);
+      const limit = parseInt(document.getElementById('limit').value, 10);
+      const resultDiv = document.getElementById('result');
+      
+      // Convert datetime-local to ISO-8601 format without timezone conversion
+      // datetime-local format: "2025-02-18T00:00"
+      // Convert to: "2025-02-18T00:00:00.000Z"
+      const from = fromValue ? fromValue + ':00.000Z' : '';
+      const to = toValue ? toValue + ':00.000Z' : '';
+      
+      // Reset result div styling
+      resultDiv.style.backgroundColor = '#f9f9f9';
+      resultDiv.style.borderColor = '#ccc';
+      
+      // Client-side validation
+      if (!from) {
+        resultDiv.style.display = 'block';
+        resultDiv.style.backgroundColor = '#ffe6e6';
+        resultDiv.style.borderColor = '#ff0000';
+        resultDiv.textContent = 'Error: "From" field is required (RESPONSE_INVALID_INITIAL_REQUEST)';
+        return;
+      }
+      
+      // Validate date range
+      if (to && fromValue && toValue) {
+        if (fromValue > toValue) {
+          resultDiv.style.display = 'block';
+          resultDiv.style.backgroundColor = '#ffe6e6';
+          resultDiv.style.borderColor = '#ff0000';
+          resultDiv.textContent = 'Error: "From" date cannot be after "To" date (RESPONSE_INVALID_INITIAL_REQUEST)';
+          return;
+        }
+      }
+      
+      // Show result div and set loading state
+      resultDiv.style.display = 'block';
+      resultDiv.innerHTML = '<div style="text-align: center; padding: 20px;">Loading...</div>';
+
+      try {
+        // Call backend endpoint
+        const response = await fetch(`/get-network-members?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&offset=${offset}&limit=${limit}`);
+        const result = await response.json();
+        
+        // Check for error response codes
+        if (result.responseCode !== 0) {
+          resultDiv.style.backgroundColor = '#ffe6e6';
+          resultDiv.style.borderColor = '#ff0000';
+          
+          let errorMsg = 'Error occurred:\n\n';
+          errorMsg += `Response Code: ${result.responseCode}\n`;
+          
+          if (result.errors && result.errors.length > 0) {
+            errorMsg += `Errors: ${result.errors.join(', ')}\n\n`;
+          }
+          
+          // Map known error codes
+          if (result.responseCode === 'RESPONSE_INVALID_INITIAL_REQUEST') {
+            errorMsg += 'Possible causes:\n- Missing base64JsonContent or signature\n- Missing "from" field\n- "from" is after "to"';
+          } else if (result.responseCode === 'RESPONSE_MERCHANT_OR_KEY_NOT_VALID') {
+            errorMsg += 'Parent merchant not found or invalid signing key';
+          }
+          
+          errorMsg += '\n\nFull Response:\n' + JSON.stringify(result, null, 2);
+          resultDiv.textContent = errorMsg;
+        } else {
+          // Success - format and display the result
+          const data = result.data;
+          let displayHTML = '<div class="result-summary">';
+          displayHTML += '<h3>✓ Success!</h3>';
+          displayHTML += `<p><strong>Parent Merchant:</strong> ${data.parentMerchantId}</p>`;
+          displayHTML += `<p><strong>Query Period:</strong> ${data.queryFrom} to ${data.queryTo}</p>`;
+          displayHTML += `<p><strong>Total Members:</strong> ${data.total}</p>`;
+          displayHTML += `<p><strong>Showing:</strong> ${data.members.length} member(s) (offset: ${offset}, limit: ${limit})</p>`;
+          displayHTML += '</div>';
+          
+          if (data.members && data.members.length > 0) {
+            displayHTML += '<table>';
+            displayHTML += '<thead><tr>';
+            displayHTML += '<th>#</th>';
+            displayHTML += '<th>Display Name</th>';
+            displayHTML += '<th>Account ID</th>';
+            displayHTML += '<th>Email</th>';
+            displayHTML += '<th>Status</th>';
+            displayHTML += '<th>Initial Association</th>';
+            displayHTML += '<th>Last Association</th>';
+            displayHTML += '<th>Last Updated</th>';
+            displayHTML += '</tr></thead>';
+            displayHTML += '<tbody>';
+            
+            data.members.forEach((member, index) => {
+              const statusClass = member.status.toUpperCase() === 'ACTIVE' ? 'status-active' : 'status-inactive';
+              displayHTML += '<tr>';
+              displayHTML += `<td>${index + 1 + offset}</td>`;
+              displayHTML += `<td>${member.displayName}</td>`;
+              displayHTML += `<td>${member.accountId}</td>`;
+              displayHTML += `<td>${member.email}</td>`;
+              displayHTML += `<td><span class="status-badge ${statusClass}">${member.status}</span></td>`;
+              displayHTML += `<td>${new Date(member.initialAssociationTime).toLocaleString()}</td>`;
+              displayHTML += `<td>${new Date(member.lastAssociationTime).toLocaleString()}</td>`;
+              displayHTML += `<td>${new Date(member.lastUpdatedTime).toLocaleString()}</td>`;
+              displayHTML += '</tr>';
+            });
+            
+            displayHTML += '</tbody></table>';
+            
+            // Pagination hint
+            if (data.total > offset + data.members.length) {
+              const remaining = data.total - (offset + data.members.length);
+              displayHTML += `<div class="pagination-hint">💡 ${remaining} more member(s) available. Increase offset to ${offset + data.members.length} to see more.</div>`;
+            }
+          } else {
+            displayHTML += '<p>No members found in the specified date range.</p>';
+          }
+          
+          displayHTML += '<div class="raw-json"><strong>Raw JSON Response:</strong><br>' + JSON.stringify(result, null, 2) + '</div>';
+          resultDiv.innerHTML = displayHTML;
+        }
+        
+        // Scroll to result
+        resultDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } catch (err) {
+        resultDiv.style.backgroundColor = '#ffe6e6';
+        resultDiv.style.borderColor = '#ff0000';
+        resultDiv.textContent = 'Network Error: ' + err.message + '\n\nThis could be due to:\n- Invalid signature (MpsException)\n- Network connectivity issues\n- Server errors';
+      }
+    });
+  </script>
+</body>
+</html>

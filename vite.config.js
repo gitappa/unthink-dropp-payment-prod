@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => {
     // Load env file based on `mode` in the current working directory.
     // Set the third parameter to '' to load all env regardless of the `VITE_` prefix.
     const env = loadEnv(mode, process.cwd(), '');
-
+    const djangoBackendUrl = env.DJANGO_BASE_URL || 'https://auraprod.unthink.ai';
     return {
         plugins: [
             react(),
@@ -40,15 +40,15 @@ export default defineConfig(({ mode }) => {
             port: 5173,
             proxy: {
                 '/api': {
-                    target: 'http://localhost:8080',
+                    target: djangoBackendUrl,
                     changeOrigin: true,
                 },
                 '/get-authorize-url': {
-                    target: 'http://localhost:8080',
+                    target: djangoBackendUrl,
                     changeOrigin: true,
                 },
                 '/users': {
-                    target: 'https://auraprod.unthink.ai',
+                    target: djangoBackendUrl,
                     changeOrigin: true,
                 }
             }

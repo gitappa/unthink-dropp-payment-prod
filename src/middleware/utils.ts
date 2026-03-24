@@ -1,7 +1,9 @@
 import axios from 'axios';
 import dotenv from 'dotenv';
+import http, { get, IncomingMessage, ServerResponse } from 'http';
 // Load environment variables
 dotenv.config();
+type Res = ServerResponse<IncomingMessage>;
 function log(message: string): void {
   console.log(`[PAYMENT-ROUTES] - ${message}`);
 }
@@ -217,32 +219,50 @@ export class CommonService {
       }
       return true;
     });
+    if(req.body.referrer_1_Account && !req.body.referrer_1_distribution_share){
+      message = `Missing distribution share for referrer accounts. Please provide referrer_1_distribution_share in the request body.`
+      log(message);
+      return {isValid: false, message}
+    }
+    if(req.body.referrer_2_Account && !req.body.referrer_2_distribution_share){
+      message = `Missing distribution share for referrer accounts. Please provide referrer_2_distribution_share in the request body.`
+      log(message);
+      return {isValid: false, message}
+    }
     return {isValid, message}
   }
 
-  static async getCallbackUrl(req: any, parent_distribution_share?: any, subParent_distribution_share?: any, subMerchantAccount?: string): Promise<{ callbackUrl: string, distribution: string | undefined }> {
+  static async getCallbackUrl(req: any, platform_distribution_share?: any, referrer_1_distribution_share?: any, referrer_2_distribution_share?: any, referrer_1_Account?: string, referrer_2_Account?: string): Promise<{ callbackUrl: string, distribution: string | undefined }> {
     console.log(`Inside getCallbackUrl function request protocol: ${req.protocol} request host:${req.get('host')}`);
     const protocol = process.env.PROTOCOL || req.protocol;
-    const host = req.get('host') || 'unthink-dropp-payment-prod-314035436999.us-central1.run.app';
+    const host = req.get('host') || process.env.DROPP_API_BASE_URL;
     const baseUrl = `${protocol}://${host}/api/payments`;
     let distribution_obj: any = {};
     let distribution: string | undefined = undefined;
-    if (req.body.hasOwnProperty('parent_distribution_share') && parent_distribution_share && (typeof parent_distribution_share === 'number' || !isNaN(parseFloat(parent_distribution_share)))) {
-        var DROPP_PARENT_MERCHANT_ID = process.env.DROPP_PARENT_MERCHANT_ID || process.env.DROPP_MERCHANT_ID;
-        const parent_parsedShare = typeof parent_distribution_share === 'string' ? parseFloat(parent_distribution_share) : parent_distribution_share;
-        distribution_obj = { [DROPP_PARENT_MERCHANT_ID]: parent_parsedShare };
-        log(`parentMerchantdistribution_share: ${parent_parsedShare}}`);
+    log(`[Inside getCallbackUrl] platform_distribution_share: ${platform_distribution_share}-> type of platform_distribution_share: ${typeof platform_distribution_share}`);
+    if (platform_distribution_share) {
+        var DROPP_PARENT_MERCHANT_ID = process.env.DROPP_PARENT_MERCHANT_ID.trim() || process.env.DROPP_MERCHANT_ID.trim();
+        const platform_parsedShare = typeof platform_distribution_share === 'string' ? parseFloat(platform_distribution_share) : platform_distribution_share;
+        distribution_obj = { [DROPP_PARENT_MERCHANT_ID]: platform_parsedShare };
+        log(`[Inside getCallbackUrl] platformMerchantdistribution_share: ${platform_parsedShare}-> type of platform_parsedShare: ${typeof platform_parsedShare}`);
+        log(`[Inside getCallbackUrl] DROPP_PARENT_MERCHANT_ID: ${DROPP_PARENT_MERCHANT_ID}`);
+      } 
+    if (referrer_1_distribution_share){
+        var DROPP_REFERRER_1_ACCOUNT_ID = referrer_1_Account.trim() || process.env.DROPP_REFERRER_1_ACCOUNT_ID.trim();
+        const referrer_1_parsedShare = typeof referrer_1_distribution_share === 'string' ? parseFloat(referrer_1_distribution_share) : referrer_1_distribution_share;
+        distribution_obj[DROPP_REFERRER_1_ACCOUNT_ID] = referrer_1_parsedShare;
+        log(`[Inside getCallbackUrl] referrer_1_Account: ${DROPP_REFERRER_1_ACCOUNT_ID} referrer_1_distribution_share: ${referrer_1_parsedShare}-> type of referrer_1_parsedShare: ${typeof referrer_1_parsedShare}`);
     }
-    if (req.body.hasOwnProperty('subParent_distribution_share') && subParent_distribution_share && (typeof subParent_distribution_share === 'number' || !isNaN(parseFloat(subParent_distribution_share)))) {
-        var DROPP_SUB_PARENT_MERCHANT_ID = subMerchantAccount || process.env.DROPP_SUB_PARENT_MERCHANT_ID;
-        const subParent_parsedShare = typeof subParent_distribution_share === 'string' ? parseFloat(subParent_distribution_share) : subParent_distribution_share;
-        distribution_obj[DROPP_SUB_PARENT_MERCHANT_ID] = subParent_parsedShare;
-        log(`subMerchantdistribution_share: ${subParent_parsedShare}}`);
+    if (referrer_2_distribution_share){
+        var DROPP_REFERRER_2_ACCOUNT_ID = referrer_2_Account.trim() || process.env.DROPP_REFERRER_2_ACCOUNT_ID.trim();
+        const referrer_2_parsedShare = typeof referrer_2_distribution_share === 'string' ? parseFloat(referrer_2_distribution_share) : referrer_2_distribution_share;
+        distribution_obj[DROPP_REFERRER_2_ACCOUNT_ID] = referrer_2_parsedShare;
+        log(`[Inside getCallbackUrl] referrer_2_Account: ${DROPP_REFERRER_2_ACCOUNT_ID} referrer_2_distribution_share: ${referrer_2_parsedShare}-> type of referrer_2_parsedShare: ${typeof referrer_2_parsedShare}`);
     }
-    log(`distribution_obj::${distribution_obj} type of distribution_obj: ${typeof distribution_obj}`);
+    log(`[Inside getCallbackUrl] distribution_obj::${JSON.stringify(distribution_obj)} type of distribution_obj: ${typeof distribution_obj}`);
     const callbackUrl = Object.keys(distribution_obj).length > 0 ? `${baseUrl}/post-callback-v2` : `${baseUrl}/post-callback-v1`;
     distribution = JSON.stringify(distribution_obj);
-    log(`distribution::${distribution} type of distribution: ${typeof distribution}`);
+    log(`[Inside getCallbackUrl] distribution::${distribution} type of distribution: ${typeof distribution}`);
     return {callbackUrl,distribution};
   }
 
@@ -273,6 +293,7 @@ export class CommonService {
         .join("; ");
       return { description, additional_details };
   }
+  
 }
 
 

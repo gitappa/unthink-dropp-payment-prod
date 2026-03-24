@@ -3,12 +3,11 @@ import { parse as parseUrl } from 'url';
 import path from 'path';
 import fs from 'fs/promises';
 import dotenv from 'dotenv';
-//import * as droppSdk from './dropp-sdk-js';
+import * as droppSdk from './dropp-sdk-js';
 import * as droppPayment from './dropp-payment';
 import * as droppTransaction from './dropp-transaction';
-//import { IInvoice } from './dropp-sdk-js/dropp-payloads';
-import * as droppSdk from 'dropp-sdk-js';
-import { IInvoice } from 'dropp-sdk-js/dropp-payloads';
+import { getNetworkMembersApi } from './network-members';
+import { IInvoice } from './dropp-sdk-js/dropp-payloads';
 
 dotenv.config();
 
@@ -64,6 +63,20 @@ function returnCallbackForTransactions(returnValue: any, res: Res) {
   );
 }
 
+function returnCallbackForNetworkMembers(returnValue: any, res: Res) {
+  res.writeHead(200);
+  res.end(JSON.stringify(returnValue));
+}
+
+function getNetworkMembers(query: any, res: Res) {
+  const request = {
+    from: query.from,
+    to: query.to,
+    offset: query.offset ? parseInt(query.offset) : 0,
+    limit: query.limit ? parseInt(query.limit) : undefined
+  };
+  getNetworkMembersApi(request, res, returnCallbackForNetworkMembers);
+}
 
 function getAuthorizeUrl(res: Res) {
   const droppClient = new droppSdk.DroppClient(process.env.DROPP_ENVIRONMENT);
@@ -181,6 +194,43 @@ function processRecurringPaymentDue(data: any, res: Res) {
   droppPayment.processRecurringPaymentDue(data, res, returnCallback);
 }
 
+function processPreAuthPayment(data: string | undefined, res: Res) {
+  if (!data) {
+    res.writeHead(400);
+    res.end(JSON.stringify({ error: 'Required param is missing.' }));
+    return;
+  }
+
+  const recurringData = JSON.parse(data);
+  log('Pre Auth payment. Initiating.');
+  log(`recurringData. ${recurringData}`);
+  droppPayment.processPreAuthPayment(recurringData, res, returnCallback);
+}
+function processSubMerchantPreAuthPayment(data: string | undefined, res: Res) {
+  if (!data) {
+    res.writeHead(400);
+    res.end(JSON.stringify({ error: 'Required param is missing.' }));
+    return;
+  }
+
+  const recurringData = JSON.parse(data);
+  log('Pre Auth payment. Initiating for sub merchant.');
+  log(`recurringData. ${recurringData}`);
+  droppPayment.processSubMerchantPreAuthPayment(recurringData, res, returnCallback);
+}
+
+function processPreAuthPaymentDue(data: any, res: Res) {
+  if (!data) {
+    res.writeHead(400);
+    res.end(JSON.stringify({ error: 'Required param is missing.' }));
+    return;
+  }
+
+  log('Pre Auth payment due processing. Initiating.');
+  droppPayment.processPreAuthPaymentDue(data, res, returnCallback);
+}
+
+
 function processUUIDGeneration(paymentDetails: string | undefined, res: Res) {
   if (!paymentDetails) {
     res.writeHead(400);
@@ -188,11 +238,14 @@ function processUUIDGeneration(paymentDetails: string | undefined, res: Res) {
     return;
   }
 
-  const paymentDetailsObj = JSON.parse(paymentDetails);
-  paymentDetailsObj.merchantAccount = myDroppMerchantAccountId;
-  paymentDetailsObj.currency = 'USD';
+  let paymentDetailsObj = JSON.parse(paymentDetails);
+  paymentDetailsObj.merchantAccount = paymentDetailsObj.subMerchantId ? paymentDetailsObj.subMerchantId : myDroppMerchantAccountId;
+  if (paymentDetailsObj.subMerchantId) {
+    paymentDetailsObj.distribution = JSON.stringify({ [myDroppMerchantAccountId]: paymentDetailsObj.sharePercent });
+  }
 
-  log('UUID Generation. Initiating.');
+  paymentDetailsObj.currency = 'USD';
+  log(`UUID Generation. Initiating. ${JSON.stringify(paymentDetailsObj)}`);
   droppPayment.generateUUID(paymentDetailsObj, res, (response: any) => {
     console.log('UUID Generation Response:', response.responseCode);
     returnCallback(response, res);
@@ -208,10 +261,12 @@ function processUUIDStatusCheck(uuid: string | undefined, res: Res) {
 
   log(`UUID Status Check. Initiating for: ${uuid}`);
   droppPayment.checkUUIDStatus(uuid, (statusResponse: any) => {
+    console.log('UUID Status Check Response:', statusResponse);
     const result = {
       status: statusResponse.responseCode === 0 ? 'success' : 'failure',
       uuidStatus: statusResponse.data?.status,
       response: statusResponse
+      // response: statusResponse.status === 200 ? 'Payment Successful!' : statusResponse.status === 202 ? 'Pending.' : 'Network Error or Failed.'
     };
     console.log(JSON.stringify(result));
     res.writeHead(200);
@@ -233,7 +288,7 @@ const requestListener = (req: IncomingMessage, res: Res) => {
   const query = urlObject.query;
   let pathname = urlObject.pathname ?? '';
 
-  if (req.method === 'POST' && pathname === '/post-callback') {
+  if (req.method === 'POST') {
     let body = '';
 
     // Collect POST body data
@@ -245,12 +300,25 @@ const requestListener = (req: IncomingMessage, res: Res) => {
       try {
         const parsedBody = JSON.parse(body);
         // Handle your POST logic here
-        processDroppPostPayment(parsedBody, res);
+        switch (pathname) {
+          case '/post-callback':
+            processDroppPostPayment(parsedBody, res);
+            break;
+          case '/pre-auth-post-callback':
+            console.log('parsedBody', JSON.stringify(parsedBody));
+            console.log("calling preAuth post");
+            processPreAuthPayment(body, res);
+            break;
+          default:
+            unknown(res);
+            break;
+        }
       } catch (error) {
         res.statusCode = 400;
         res.end('Invalid JSON');
       }
     });
+
     return; // exit early since handled
   }
 
@@ -279,11 +347,25 @@ const requestListener = (req: IncomingMessage, res: Res) => {
     case '/rps-callback-due':
       processRecurringPaymentDue({ recurringToken: query.recurringToken, amount: query.amount }, res);
       break;
+    case '/pre-auth-callback':
+      console.log('query', JSON.stringify(query));
+      processPreAuthPayment(query.RecurringData as string, res);
+      break;
+    case '/pre-auth-submerchant-callback':
+      console.log('query', JSON.stringify(query));
+      processSubMerchantPreAuthPayment(query.RecurringData as string, res);
+      break;
+    case '/pre-auth-callback-due':
+      processPreAuthPaymentDue({ recurringToken: query.recurringToken, amount: query.amount, action: query.action }, res);
+      break;
     case '/check-uuid-status':
       processUUIDStatusCheck(query.uuid as string, res);
       break;
     case '/get-transactions':
       getTransactions(res);
+      break;
+    case '/get-network-members':
+      getNetworkMembers(query, res);
       break;
     case '/':
     case '/index.html':

@@ -7,11 +7,11 @@ import { Dropp } from '../utils/Dropp';
 const useDroppWallet = (config = {}) => {
     const {
         merchantId = process.env.DROPP_MERCHANT_ID,
-        environment = process.env.DROPP_ENVIRONMENT || 'PROD',
-        ledgerId = LedgerId.MAINNET,
+        environment = process.env.DROPP_ENVIRONMENT || 'SANDBOX',
+        ledgerId = LedgerId.TESTNET,
         projectId = '31267a2a9ddb2185483abcf7d3dc4903',
-        networks = [HederaChainId.Mainnet],
-        apiBaseUrl = 'https://unthink-dropp-payment-prod-314035436999.us-central1.run.app'
+        networks = [HederaChainId.Testnet],
+        apiBaseUrl = process.env.DROPP_API_BASE_URL || 'https://unthink-dropp-payment-stage-314035436999.us-central1.run.app'
     } = config;
 
     const [isConnected, setIsConnected] = useState(false);
@@ -114,12 +114,11 @@ const useDroppWallet = (config = {}) => {
                 _id: userInfo._id,
                 dropp: {
                     testnet: {
-                    },
-                    mainnet: {
                         merchantAccount: accountId,
                         currency: 'USD',
                         hedera_details: {}
-                    }
+                    },
+                    mainnet: {}
                 }
             };
 

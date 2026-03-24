@@ -1,8 +1,11 @@
 import { Router, Request, Response } from 'express';
+import http, { get, IncomingMessage, ServerResponse } from 'http';
 import * as droppSdk from '../../dropp-sdk-js';
 import { IInvoice } from '../../dropp-sdk-js/dropp-payloads';
 import { TransactionService, HederaService, CommonService } from '../middleware/utils';
-
+import { getNetworkMembersApi } from '../../network-members';
+import { inspect } from 'util';
+type Res = ServerResponse<IncomingMessage>;
 const router = Router();
 
 // In-memory store for checkout mappings (merchantId -> checkoutId -> paymentDetails)
@@ -13,6 +16,29 @@ const checkoutStore: Record<string, Record<string, any>> = {};
 function log(message: string): void {
   console.log(`[PAYMENT-ROUTES] - ${message}`);
 }
+
+function formatError(error: any): string {
+  const details =
+    error?.response?.data ||
+    error?.response ||
+    error?.data ||
+    error?.request ||
+    error;
+
+  return inspect(details, { depth: 8, colors: false });
+}
+
+function getErrorMessage(error: any): string {
+  if (!error) return 'Unknown error';
+  if (typeof error === 'string') return error;
+  if (error?.message) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
 
 /**
  * Helper function to return error response
@@ -66,10 +92,11 @@ router.post('/checkout', async (req: Request, res: Response) => {
     log(`req.protocol: ${req.protocol}, req.get('host'): ${req.get('host')}`);
     //-------------------Validate required fields------------
     let valid_details = await CommonService.checkoutValidator(req, res);
-    const merchantAccount = req.body.merchantAccount || process.env.DROPP_MERCHANT_ID!;
-    const subMerchantAccount = req.body.subMerchantAccount|| process.env.DROPP_SUB_MERCHANT_ID || '';
+    let merchantAccount = req.body.merchantAccount || process.env.DROPP_MERCHANT_ID!;
+    let referrer_1_Account = req.body.referrer_1_Account || process.env.DROPP_REFERRER_1_ACCOUNT_ID || '';
+    let referrer_2_Account = req.body.referrer_2_Account || process.env.DROPP_REFERRER_2_ACCOUNT_ID || '';
     if (valid_details.isValid) {
-      const {
+      let {
         amount,
         currency = 'USD',
         user_id,
@@ -78,8 +105,9 @@ router.post('/checkout', async (req: Request, res: Response) => {
         service_id = '',
         thumbnail,
         signingKey = process.env.DROPP_MERCHANT_SIGNING_KEY,
-        parent_distribution_share,
-        subParent_distribution_share,
+        platform_distribution_share,
+        referrer_1_distribution_share,
+        referrer_2_distribution_share,
         //callbackUrl = `${req.protocol}://${req.get('host')}/api/payments/post-callback-v2`,
         successUrl, // Client success redirect URL
         failureUrl, // Client failure redirect URL
@@ -95,10 +123,28 @@ router.post('/checkout', async (req: Request, res: Response) => {
         payByCC = true,
         payByBank = true,
       } = req.body;
-      
+      if(!req.body.merchantAccount && (req.body.referrer_1_Account || req.body.referrer_2_Account)){
+        if(referrer_1_distribution_share && referrer_2_distribution_share){
+          platform_distribution_share = 100 - (referrer_1_distribution_share + referrer_2_distribution_share);
+        }else if(referrer_1_distribution_share){  
+          platform_distribution_share = 100 - referrer_1_distribution_share;
+        }else if(referrer_2_distribution_share){
+          platform_distribution_share = 100 - referrer_2_distribution_share;
+        }
+        if(req.body.referrer_1_Account){
+          merchantAccount = req.body.referrer_1_Account;
+          referrer_1_Account = '';
+          referrer_1_distribution_share = 0;
+        }else if(req.body.referrer_2_Account){
+          merchantAccount = req.body.referrer_2_Account;
+          referrer_2_Account = '';
+          referrer_2_distribution_share = 0;
+        }
+        
+      }
       //-----------------get correct callback url for single payment or submerchant payment handler------------
-      log(`parent_distribution_share: ${parent_distribution_share}, subParent_distribution_share: ${subParent_distribution_share}`);
-      var getCallbackUrl_details = await CommonService.getCallbackUrl(req, parent_distribution_share, subParent_distribution_share,subMerchantAccount);
+      log(`merchantAccount: ${merchantAccount}, referrer_1_Account: ${referrer_1_Account}, referrer_2_Account: ${referrer_2_Account}, platform_distribution_share: ${platform_distribution_share}, referrer_1_distribution_share: ${referrer_1_distribution_share}, referrer_2_distribution_share: ${referrer_2_distribution_share}`);
+      var getCallbackUrl_details = await CommonService.getCallbackUrl(req, platform_distribution_share, referrer_1_distribution_share, referrer_2_distribution_share, referrer_1_Account, referrer_2_Account);
       log(`Using callback URL: ${getCallbackUrl_details.callbackUrl}`);
       log(`Using distribution: ${JSON.stringify(getCallbackUrl_details.distribution)}`);
       //-----------------create Unthink transaction record and get reference(unique id) with received data---------------------------------
@@ -166,7 +212,7 @@ router.post('/checkout', async (req: Request, res: Response) => {
         successMessage: successMessage,
         //successCallbackUrl: successCallbackUrl || "",
         //failureCallbackUrl: failureCallbackUrl || "",
-        submitToCallBack: 'POST' as const // Use POST for callback (more reliable than GET)
+        submitToCallBack: 'GET' as const // Use POST for callback (more reliable than GET)
       };
       if(getCallbackUrl_details.distribution){
         (paymentRequestPayload as any).distribution = getCallbackUrl_details.distribution;
@@ -342,11 +388,15 @@ router.post('/post-callback', (req: Request, res: Response) => {
         });
       })
       .catch((paymentError: any) => {
-        log(`Payment submission failed: ${JSON.stringify(paymentError)}`);
+        const errorMessage = getErrorMessage(paymentError);
+        const errorPayload = paymentError?.response?.data || paymentError?.data || paymentError;
+
+        log(`Payment submission failed (message): ${errorMessage}`);
+        log(`Payment submission failed (payload): ${formatError(errorPayload)}`);
 
         if (checkoutId && checkoutStore[merchantId] && checkoutStore[merchantId][checkoutId]) {
           checkoutStore[merchantId][checkoutId].status = 'failed';
-          checkoutStore[merchantId][checkoutId].error = paymentError;
+          checkoutStore[merchantId][checkoutId].error = errorPayload;
         }
 
          // If client failure callback URL provided, redirect to it
@@ -355,14 +405,14 @@ router.post('/post-callback', (req: Request, res: Response) => {
           redirectUrl.searchParams.append('checkoutId', checkoutId);
           redirectUrl.searchParams.append('status', 'failed');
           redirectUrl.searchParams.append('reference', invoiceData.reference);
-          redirectUrl.searchParams.append('error', paymentError.message || 'Payment processing failed');
+          redirectUrl.searchParams.append('error', errorMessage);
 
           log(`Redirecting to failure callback URL: ${redirectUrl.toString()}`);
           return res.redirect(redirectUrl.toString());
         }
 
         // Fallback: return error JSON if no failure callback URL provided
-        returnError(res, 500, `Payment processing failed: ${paymentError.message || JSON.stringify(paymentError)}`);
+        returnError(res, 500, `Payment processing failed: ${errorMessage}`);
       });
   } catch (error: any) {
     log(`Error in /post-callback: ${error.message}`);
@@ -405,7 +455,6 @@ router.get('/post-callback-v1', async(req: Request, res: Response) => {
       return returnError(res, 400, 'Invalid invoiceBytes encoding');
     }
     log(`Invoice decoded: ${JSON.stringify(invoiceData)}`);
-    log(`Invoice decoded: ${JSON.stringify(invoiceData)}`);
     log(`Distribution in invoiceData: ${JSON.stringify(invoiceData.distribution)}`);
     log(`DistributionBytes in p2pObj: ${p2pObj.distributionBytes}`);
     log(`Payment details: ${invoiceData.currency} ${invoiceData.amount}, from ${p2pObj.payer} to ${invoiceData.merchantAccount} transaction_id: ${invoiceData.reference}  `);
@@ -413,16 +462,6 @@ router.get('/post-callback-v1', async(req: Request, res: Response) => {
     const merchantId = invoiceData.merchantAccount;
     const checkoutId = invoiceData.qrCodeUUID || (p2pObj as any).checkoutId;
     
-    /*
-    const checkoutData = checkoutStore[merchantId] ? checkoutStore[merchantId][checkoutId] : null;
-    const successCallbackUrl = checkoutData?.successCallbackUrl;
-    const failureCallbackUrl = checkoutData?.failureCallbackUrl;
-    
-    if (checkoutId && checkoutStore[merchantId] && checkoutStore[merchantId][checkoutId]) {
-      checkoutStore[merchantId][checkoutId].status = 'payment_received';
-      checkoutStore[merchantId][checkoutId].p2pData = p2pObj;
-    }
-     */
 
     let successUrl = '';
     let failureUrl = '';
@@ -467,6 +506,8 @@ router.get('/post-callback-v1', async(req: Request, res: Response) => {
         
         const isSuccess = paymentResponse.responseCode === 0;
         const redirectUrl = isSuccess ? successUrl : failureUrl;
+        const paymentRef = paymentResponse?.data?.paymentRef || (paymentResponse as any)?.paymentRef || '';
+        const transactionReference = paymentResponse?.data?.transactionReference || (paymentResponse as any)?.transactionReference || '';
 
         if (isSuccess){
           try {
@@ -491,8 +532,8 @@ router.get('/post-callback-v1', async(req: Request, res: Response) => {
           redirectUrlWithParams.searchParams.append('amount', invoiceData.amount.toString());
           redirectUrlWithParams.searchParams.append('currency', invoiceData.currency);
           redirectUrlWithParams.searchParams.append('payer', p2pObj.payer);
-          redirectUrlWithParams.searchParams.append('paymentRef', paymentResponse.data.paymentRef);
-          redirectUrlWithParams.searchParams.append('transactionReference', paymentResponse.data.transactionReference);
+          if (paymentRef) redirectUrlWithParams.searchParams.append('paymentRef', paymentRef);
+          if (transactionReference) redirectUrlWithParams.searchParams.append('transactionReference', transactionReference);
           if (hederaTxId) {
             redirectUrlWithParams.searchParams.append('hederaTransactionId', hederaTxId);
           }
@@ -510,18 +551,17 @@ router.get('/post-callback-v1', async(req: Request, res: Response) => {
         });
       })
       .catch(async (paymentError: any) => {
-        log(`Payment submission failed: ${JSON.stringify(paymentError)}`);
-        /*
-        if (checkoutId && checkoutStore[merchantId] && checkoutStore[merchantId][checkoutId]) {
-          checkoutStore[merchantId][checkoutId].status = 'failed';
-          checkoutStore[merchantId][checkoutId].error = paymentError;
-        }*/
-       
+        const errorMessage = getErrorMessage(paymentError);
+        const errorPayload = paymentError?.response?.data || paymentError?.data || paymentError;
+
+        log(`Payment submission failed (message): ${errorMessage}`);
+        log(`Payment submission failed (payload): ${formatError(errorPayload)}`);
+
         if (failureUrl) {
           try {
             const updateResp = await TransactionService.update(invoiceData.reference, {
               payment_status: 'failed',
-              paymentResponse: paymentError,
+              paymentResponse: errorPayload,
             });
             if (updateResp.ok) {
               log('updated checkout complete to MongoDB.');
@@ -533,13 +573,13 @@ router.get('/post-callback-v1', async(req: Request, res: Response) => {
           redirectUrl.searchParams.append('checkoutId', checkoutId);
           redirectUrl.searchParams.append('status', 'failed');
           redirectUrl.searchParams.append('reference', invoiceData.reference);
-          redirectUrl.searchParams.append('error', paymentError.message || 'Payment processing failed');
+          redirectUrl.searchParams.append('error', errorMessage);
 
           log(`Redirecting to failure callback URL: ${redirectUrl.toString()}`);
           return res.redirect(redirectUrl.toString());
         }
 
-        returnError(res, 500, `Payment processing failed: ${paymentError.message || JSON.stringify(paymentError)}`);
+        returnError(res, 500, `Payment processing failed: ${errorMessage}`);
       });
   } catch (error: any) {
     log(`Error in /callback: ${error.message}`);
@@ -642,6 +682,8 @@ router.get('/post-callback-v2', async(req: Request, res: Response) => {
 
         const isSuccess = paymentResponse.responseCode === 0;
         const redirectUrl = isSuccess ? successUrl : failureUrl;
+        const paymentRef = paymentResponse?.data?.paymentRef || (paymentResponse as any)?.paymentRef || '';
+        const transactionReference = paymentResponse?.data?.transactionReference || (paymentResponse as any)?.transactionReference || '';
 
         if (isSuccess){
           try {
@@ -654,7 +696,7 @@ router.get('/post-callback-v2', async(req: Request, res: Response) => {
               log('updated checkout complete to MongoDB.');
             }
           } catch (dbError) {
-            log(`Failed to save payment_received details to MongoDB: ${dbError}`);
+            log(`Failed to save payment_completed details to MongoDB: ${dbError}`);
           }
         }
        
@@ -666,8 +708,8 @@ router.get('/post-callback-v2', async(req: Request, res: Response) => {
           redirectUrlWithParams.searchParams.append('amount', invoiceData.amount.toString());
           redirectUrlWithParams.searchParams.append('currency', invoiceData.currency);
           redirectUrlWithParams.searchParams.append('payer', p2pObj.payer);
-          redirectUrlWithParams.searchParams.append('paymentRef', paymentResponse.data.paymentRef);
-          redirectUrlWithParams.searchParams.append('transactionReference', paymentResponse.data.transactionReference);
+          if (paymentRef) redirectUrlWithParams.searchParams.append('paymentRef', paymentRef);
+          if (transactionReference) redirectUrlWithParams.searchParams.append('transactionReference', transactionReference);
           if (hederaTxId) {
             redirectUrlWithParams.searchParams.append('hederaTransactionId', hederaTxId);
           }
@@ -685,13 +727,17 @@ router.get('/post-callback-v2', async(req: Request, res: Response) => {
         });
       })
       .catch(async (paymentError: any) => {
-        log(`Payment submission failed: ${JSON.stringify(paymentError)}`);
-       
+        const errorMessage = getErrorMessage(paymentError);
+        const errorPayload = paymentError?.response?.data || paymentError?.data || paymentError;
+
+        log(`Payment submission failed (message): ${errorMessage}`);
+        log(`Payment submission failed (payload): ${formatError(errorPayload)}`);
+
         if (failureUrl) {
           try {
             const updateResp = await TransactionService.update(invoiceData.reference, {
               payment_status: 'failed',
-              paymentResponse: paymentError,
+              paymentResponse: errorPayload,
             });
             if (updateResp.ok) {
               log('updated checkout complete to MongoDB.');
@@ -703,16 +749,84 @@ router.get('/post-callback-v2', async(req: Request, res: Response) => {
           redirectUrl.searchParams.append('checkoutId', checkoutId);
           redirectUrl.searchParams.append('status', 'failed');
           redirectUrl.searchParams.append('reference', invoiceData.reference);
-          redirectUrl.searchParams.append('error', paymentError.message || 'Payment processing failed');
+          redirectUrl.searchParams.append('error', errorMessage);
 
           log(`Redirecting to failure callback URL: ${redirectUrl.toString()}`);
           return res.redirect(redirectUrl.toString());
         }
 
-        returnError(res, 500, `Payment processing failed: ${paymentError.message || JSON.stringify(paymentError)}`);
+        returnError(res, 500, `Payment processing failed: ${errorMessage}`);
       });
   } catch (error: any) {
     log(`Error in /post-callback1: ${error.message}`);
+    returnError(res, 500, error.message || 'Internal server error');
+  }
+});
+
+
+// GET /api/payments/network-members
+//
+// Fetch network members for a merchant within a time range. Query parameters:
+//   from (string, timestamp) - start of range (required)
+//   to   (string, timestamp) - end of range (required)
+//   offset (number, optional)
+//   limit  (number, optional, max 100)
+//
+// Response mirrors the Dropp SDK result.
+router.get('/network-members', async (req: Request, res: Response) => {
+  try {
+    // Extract and normalize query values; convert numeric timestamps or loose strings to ISO
+    const rawFrom = (req.query.from as string) || '';
+    const rawTo = (req.query.to as string) || '';
+    const offset = parseInt((req.query.offset as string) || '0', 10);
+    const limit = req.query.limit ? Math.min(parseInt(req.query.limit as string), 100) : undefined;
+    // helper to convert a value to an ISO string if possible
+    function normalizeTime(val: string): string | undefined {
+      if (!val) return undefined;
+      const lower = val.toLowerCase();
+      if (lower === 'undefined' || lower === 'null') {
+        return undefined;
+      }
+      const asNum = Number(val);
+      if (!isNaN(asNum) && val.trim() !== '') {
+        const d = new Date(asNum);
+        if (!isNaN(d.getTime())) {
+          return d.toISOString();
+        }
+      }
+      const d2 = new Date(val);
+      if (!isNaN(d2.getTime())) {
+        return d2.toISOString();
+      }
+      // fall back to original string if it at least looks like a non-empty value
+      return val;
+    }
+
+    const from = normalizeTime(rawFrom);
+    const to = normalizeTime(rawTo);
+
+    if (!from || !to) {
+      returnError(res, 400, 'from and to query parameters are required and must be valid dates');
+      return;
+    }
+
+    const requestPayload: any = {
+      from,
+      to,
+      offset,
+      limit,
+    };
+    
+    getNetworkMembersApi(requestPayload, res, (returnValue: any, resObj: Res) => {
+      if (returnValue && returnValue.responseCode === 0) {
+        returnSuccess(res, returnValue);
+      } else {
+        const msg = returnValue?.error || 'Failed to fetch network members';
+        returnError(res, 500, msg);
+      }
+    });
+  } catch (error: any) {
+    log(`Error in /network-members: ${error.message}`);
     returnError(res, 500, error.message || 'Internal server error');
   }
 });
@@ -1023,6 +1137,8 @@ router.post('/get-authorize-url', async (req: Request, res: Response) => {
     returnError(res, 500, error.message || 'Internal server error');
   }
 });
+
+
 
 const activeSessions = new Map<string, any>();
 

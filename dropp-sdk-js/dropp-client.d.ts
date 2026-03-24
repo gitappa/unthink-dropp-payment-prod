@@ -10,6 +10,12 @@ export declare class DroppClient {
      * @param env SANDBOX/PROD/.. from DroppEnvironment
      */
     constructor(env: string);
+    /**
+     * Fetch network members for a merchant.
+     * @param primaryMerchantAccountId Merchant account ID
+     * @param request APINetworkMembersRequest object
+     * @param signingKey EdDSA signing key (hex)
+     */
     postToDroppService(url: string, postData: any): Promise<DroppResponse>;
     generateUUID(paymentRequestData: PaymentRequestData): Promise<DroppResponse>;
     waitForCompletion(uuid: string, retries?: number, interval?: number): Promise<DroppResponse>;

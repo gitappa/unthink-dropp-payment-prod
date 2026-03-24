@@ -50,6 +50,9 @@ export interface RecurringPaymentPayload {
     dataInBase64?: string;
     data?: string;
 }
+export interface PreAuthPaymentPayload extends RecurringPaymentPayload {
+    device?: string;
+}
 export interface RecurringPaymentData {
     readonly merchantId?: string;
     readonly merchantAccount: string;
@@ -78,6 +81,13 @@ export interface RecurringDueData {
     readonly merchantAccountId: string;
     readonly amount: number;
     readonly recurringToken: string;
+}
+export interface PreAuthDueData {
+    readonly merchantAccountId: string;
+    readonly amount: number;
+    readonly recurringToken: string;
+    readonly action: "PROCESS" | "CANCEL";
+    readonly distribution?: string;
 }
 export declare class PromiseToPay implements IPromiseToPay {
     payer: string;

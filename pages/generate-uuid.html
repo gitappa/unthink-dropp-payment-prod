@@ -38,6 +38,21 @@
             display: block;
             margin-bottom: 5px;
         }
+        /* inline radio group: keep everything on a single line */
+        .inline-radio-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: nowrap;
+        }
+        .inline-radio-group > label {
+            display: inline-flex;
+            align-items: center;
+            margin-bottom: 0;
+        }
+        .inline-radio-group input[type="radio"] {
+            margin-right: 6px;
+        }
         input[type="text"],
         input[type="number"],
         textarea {
@@ -96,6 +111,13 @@
     </div>
 
     <!-- <form id="uuidForm"> -->
+        <div class="form-group inline-radio-group">
+            <label>Payment Type:</label>
+            <label><input type="radio" name="invoiceType" value="normal" checked> Normal Payment</label>
+            <label><input type="radio" name="invoiceType" value="preauth"> Pre-auth Payment</label>
+            <label><input type="radio" name="invoiceType" value="submerchant"> Pre-auth Payment for Sub Merchant</label>
+        </div>
+
         <div class="form-group">
             <label for="reference">Reference:</label>
             <input type="text" id="reference" name="reference" value="DefaultReferenceID123" required>
@@ -114,19 +136,35 @@
             <!-- <input type="text" id="url" name="url" value="http://localhost:8000/post-callback" required> -->
         </div>
         <div class="form-group">
-            <label for="amount">Amount:</label>
+            <label for="amount" id="amountLabel">Amount:</label>
             <input type="number" id="amount" name="amount" step="0.01" value="0.1" required>
+        </div>
+
+        <div class="form-group" id="authHoldGroup" style="display: none;">
+            <label for="authHoldTimeInSeconds">Auth Hold Time (seconds):</label>
+            <input type="number" id="authHoldTimeInSeconds" name="authHoldTimeInSeconds" step="1" value="1800" min="1" max="86400">
+            <small>Maximum: 86400 seconds (24 hours)</small>
+        </div>
+        <div class="form-group" id="submerchantGroup" style="display: none;">
+            <label for="subMerchantId">Sub merchant ID:</label>
+            <input type="text" id="subMerchantId" name="subMerchantId" value="" required>
+            <small>eg. 0.0.000001</small>
+        </div>
+        <div class="form-group" id="sharePercentGroup" style="display: none;">
+            <label for="sharePercent">Main merchant Fee (%):</label>
+            <input type="number" id="sharePercent" name="sharePercent" step="0.01" value="0" min="0" max="100" required>
+            <small>0-100% - Up to 2 decimals (e.g. 50.25)</small>
         </div>
         <div class="form-group">
             <label for="successMessage">Success Message:</label>
             <input type="text" id="successMessage" name="successMessage" value="Your Custom Message here" required>
         </div>
 
-        <button onclick="generateUUID(event)">Generate UUID</button>
-        <button onclick="generateUUIDWithPost(event)">Generate UUID with POST callback</button>
+        <button id="generateBtn">Generate UUID</button>
+        <button id="generatePostBtn">Generate UUID with POST callback</button>
 
-        <div style="margin-top: 15px; padding: 10px; background-color: #f0f8ff; border-left: 4px solid #2196F3; border-radius: 4px;">
-            <p style="margin: 0; font-size: 14px; color: #333;">
+        <div id="callbackNote" style="margin-top: 15px; padding: 10px; background-color: #f0f8ff; border-left: 4px solid #2196F3; border-radius: 4px;">
+            <p id="callbackNoteInner" style="margin: 0; font-size: 14px; color: #333;">
                 <strong>Note:</strong>
                 <br>• "Generate UUID" uses callback URL: <code><strong>/callback</strong></code>
                 <br>• "Generate UUID with POST callback" uses callback URL: <code><strong>/post-callback</strong></code>
@@ -139,7 +177,7 @@
         <p id="uuid"></p>
         <p>Dropp App Link: <a id="droppAppLink" href="#" target="_blank"></a></p>
         <div class="qr-container">
-            <div id="qrcode"></div>
+            <div id="qrcode" onclick="copyUrl()"></div>
             <button id="checkStatusBtn" style="margin-top: 10px;">
                 <span id="checkStatusText">Check UUID Status</span>
                 <span id="checkStatusLoader" style="display: none;">Loading...</span>
@@ -149,73 +187,200 @@
     </div>
 
     <script>
+        function copyUrl(event) {
+            const link = document.getElementById('qrcode').title;
+            navigator.clipboard.writeText(link).then(() => {
+                alert('Dropp App link copied to clipboard: ' + link);
+            }).catch(err => {
+                alert('Failed to copy: ' + err);
+            });
+        }
+
         async function fetchUUID(formData) {
+            const endpoint = `/generate-uuid?paymentDetails=${encodeURIComponent(JSON.stringify(formData))}`;
             try {
-                const response = await fetch(`/generate-uuid?paymentDetails=${encodeURIComponent(JSON.stringify(formData))}`);
-                const data = await response.json();
-                console.log("Data: ", data);
-                // if (data.status === 'success' && data.paymentResponse.data) {
-                if (data.responseCode === 0 && data.data) {
-                    // const uuid = data.paymentResponse.data.uuid;
-                    // const link = data.paymentResponse.data.link;
-                    const uuid = data.data.uuid;
-                    const link = data.data.link;
-                    document.getElementById('uuid').textContent = uuid;
-                    document.getElementById('result').style.display = 'block';
-
-                    // Clear previous QR code
-                    document.getElementById('qrcode').innerHTML = '';
-
-                    // Generate QR code using qrcode.js
-                    new QRCode(document.getElementById('qrcode'), {
-                        text: link,
-                        width: 300,
-                        height: 300,
-                        colorDark : "#000000",
-                        colorLight : "#ffffff",
-                        correctLevel : QRCode.CorrectLevel.H // High error correction
-                    });
-
-                    // Clear previous status display
-                    document.getElementById('statusDisplay').textContent = '';
-
+                const res = await fetch(endpoint, { cache: 'no-store' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                console.log('Data: ', data);
+                if (data && data.responseCode === 0 && data.data) {
+                    const { uuid, link } = data.data;
+                    uuidEl.textContent = uuid;
+                    resultEl.style.display = 'block';
+                    // regenerate QR
+                    qrcodeEl.innerHTML = '';
+                    new QRCode(qrcodeEl, { text: link, width: 300, height: 300, colorDark: '#000000', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.H });
+                    statusDisplay.textContent = '';
                 } else {
                     alert('Error generating UUID: ' + JSON.stringify(data));
                 }
-            } catch (error) {
-                alert('Error: ' + error.message);
+            } catch (err) {
+                alert('Error: ' + (err && err.message ? err.message : String(err)));
             }
         }
 
-        async function generateUUIDWithPost(e) {
-            e.preventDefault();
+        // Cached elements for better performance
+        const referenceEl = document.getElementById('reference');
+        const thumbnailEl = document.getElementById('thumbnail');
+        const descriptionEl = document.getElementById('description');
+        const urlEl = document.getElementById('url');
+        const amountEl = document.getElementById('amount');
+        const authHoldEl = document.getElementById('authHoldTimeInSeconds');
+        const successMessageEl = document.getElementById('successMessage');
+        const subMerchantIdEl = document.getElementById('subMerchantId');
+        const sharePercentEl = document.getElementById('sharePercent');
+        const qrcodeEl = document.getElementById('qrcode');
+        const resultEl = document.getElementById('result');
+        const uuidEl = document.getElementById('uuid');
+        const statusDisplay = document.getElementById('statusDisplay');
+        const callbackNoteInner = document.getElementById('callbackNoteInner');
+
+        function getOrigin() {
+            try { return (location && location.origin) ? location.origin : 'http://localhost:8000'; } catch (e) { return 'http://localhost:8000'; }
+        }
+
+        function setCallbackAndNote(isPreauth) {
+            const origin = getOrigin();
+            if (isPreauth) {
+                urlEl.value = origin + '/pre-auth-callback';
+                callbackNoteInner.innerHTML = '<strong>Note:</strong><br>• "Generate UUID" uses callback URL: <code><strong>/pre-auth-callback</strong></code><br>• "Generate UUID with POST callback" uses callback URL: <code><strong>/pre-auth-post-callback</strong></code>';
+            } else {
+                urlEl.value = origin + '/callback';
+                callbackNoteInner.innerHTML = '<strong>Note:</strong><br>• "Generate UUID" uses callback URL: <code><strong>/callback</strong></code><br>• "Generate UUID with POST callback" uses callback URL: <code><strong>/post-callback</strong></code>';
+            }
+        }
+
+        // Toggle form when payment type changes
+        function updateFormForType() {
+            const selected = document.querySelector('input[name="invoiceType"]:checked').value;
+            const authGroup = document.getElementById('authHoldGroup');
+            const submerchantGroup = document.getElementById('submerchantGroup');
+            const sharePercentGroup = document.getElementById('sharePercentGroup');
+            const amountLabel = document.getElementById('amountLabel');
+            const amountInput = document.getElementById('amount');
+            const urlInput = document.getElementById('url');
+            const callbackNoteEl = document.getElementById('callbackNote');
+            if (selected === 'preauth') {
+                authGroup.style.display = 'block';
+                submerchantGroup.style.display = 'none';
+                sharePercentGroup.style.display = 'none';
+                amountLabel.textContent = 'Max Amount:';
+                amountInput.placeholder = 'Maximum hold amount';
+                amountInput.value = '20';
+                // Use origin when available, otherwise default to localhost:8000
+                try {
+                    const origin = (location && location.origin) ? location.origin : 'http://localhost:8000';
+                    urlInput.value = origin + '/pre-auth-callback';
+                } catch (e) {
+                    urlInput.value = 'http://localhost:8000/pre-auth-callback';
+                }
+                callbackNoteEl.innerHTML = '<p style="margin: 0; font-size: 14px; color: #333;"><strong>Note:</strong><br>• "Generate UUID" uses callback URL: <code><strong>/pre-auth-callback</strong></code><br>• "Generate UUID with POST callback" uses callback URL: <code><strong>/pre-auth-post-callback</strong></code></p>';
+            } else if (selected === 'submerchant') {
+                authGroup.style.display = 'block';
+                submerchantGroup.style.display = 'block';
+                sharePercentGroup.style.display = 'block';
+                amountLabel.textContent = 'Max Amount:';
+                amountInput.placeholder = 'Maximum hold amount';
+                amountInput.value = '20';
+                // Use origin when available, otherwise default to localhost:8000
+                try {
+                    const origin = (location && location.origin) ? location.origin : 'http://localhost:8000';
+                    urlInput.value = origin + '/pre-auth-submerchant-callback';
+                } catch (e) {
+                    urlInput.value = 'http://localhost:8000/pre-auth-submerchant-callback';
+                }
+                callbackNoteEl.innerHTML = '<p style="margin: 0; font-size: 14px; color: #333;"><strong>Note:</strong><br>• "Generate UUID" uses callback URL: <code><strong>/pre-auth-callback</strong></code><br>• "Generate UUID with POST callback" uses callback URL: <code><strong>/pre-auth-post-callback</strong></code></p>';
+            } else {
+                authGroup.style.display = 'none';
+                submerchantGroup.style.display = 'none';
+                sharePercentGroup.style.display = 'none';
+                amountLabel.textContent = 'Amount:';
+                amountInput.placeholder = '';
+                amountInput.value = '0.1';
+                try {
+                    const origin = (location && location.origin) ? location.origin : 'http://localhost:8000';
+                    urlInput.value = origin + '/callback';
+                } catch (e) {
+                    urlInput.value = 'http://localhost:8000/callback';
+                }
+                callbackNoteEl.innerHTML = '<p style="margin: 0; font-size: 14px; color: #333;"><strong>Note:</strong><br>• "Generate UUID" uses callback URL: <code><strong>/callback</strong></code><br>• "Generate UUID with POST callback" uses callback URL: <code><strong>/post-callback</strong></code></p>';
+            }
+        }
+
+        // Attach change handlers to radio buttons
+        document.querySelectorAll('input[name="invoiceType"]').forEach(r => r.addEventListener('change', updateFormForType));
+        // initialize
+        updateFormForType();
+
+        // Unified generator for GET/POST-style submission
+        async function handleGenerate(submitMethod, e) {
+            if (e && typeof e.preventDefault === 'function') e.preventDefault();
+            const invoiceType = document.querySelector('input[name="invoiceType"]:checked').value;
+            const amountVal = parseFloat(amountEl.value || 0);
+
             const formData = {
-                reference: document.getElementById('reference').value,
-                thumbnail: document.getElementById('thumbnail').value,
-                description: document.getElementById('description').value,
-                url: document.getElementById('url').value,
-                amount: parseFloat(document.getElementById('amount').value),
-                submitToCallBack: 'post', //  submitToCallBack: 'get' or 'post'
-                successMessage: document.getElementById('successMessage').value // Custom success message
+                reference: referenceEl.value,
+                thumbnail: thumbnailEl.value,
+                description: descriptionEl.value,
+                url: urlEl.value,
+                submitToCallBack: submitMethod, // 'get' or 'post'
+                successMessage: successMessageEl.value
             };
+
+            if (invoiceType === 'preauth') {
+                const authHold = parseInt(authHoldEl.value || '0', 10);
+                if (!amountVal || amountVal <= 0) {
+                    alert('Please provide a valid Max Amount greater than 0 for pre-auth.');
+                    return;
+                }
+                if (!authHold || authHold <= 0 || authHold > 86400) {
+                    alert('Please provide a valid Auth Hold Time in seconds (1 - 86400).');
+                    return;
+                }
+                formData.invoiceType = 'PREAUTH';
+                formData.authHoldTimeInSeconds = authHold;
+                formData.maxAmount = amountVal;
+            } else if (invoiceType === 'submerchant') {
+                const authHold = parseInt(authHoldEl.value || '0', 10);
+                const subMerchantId = subMerchantIdEl.value.trim();
+                const sharePercentRaw = (sharePercentEl.value || '').trim();
+                const sharePercent = parseFloat(sharePercentRaw || '0');
+
+                if (!amountVal || amountVal <= 0) {
+                    alert('Please provide a valid Max Amount greater than 0 for sub merchant payment.');
+                    return;
+                }
+                if (!authHold || authHold <= 0 || authHold > 86400) {
+                    alert('Please provide a valid Auth Hold Time in seconds (1 - 86400).');
+                    return;
+                }
+                if (!subMerchantId) {
+                    alert('Please provide a valid Sub Merchant ID.');
+                    return;
+                }
+                if (!/^\d+(\.\d{1,2})?$/.test(sharePercentRaw)) {
+                    alert('Share Percent must be a number with at most 2 decimal places.');
+                    return;
+                }
+                if (Number.isNaN(sharePercent) || sharePercent < 0 || sharePercent > 100) {
+                    alert('Please provide a valid Share Percent (0 - 100).');
+                    return;
+                }
+                formData.invoiceType = 'PREAUTH';
+                formData.authHoldTimeInSeconds = authHold;
+                formData.maxAmount = amountVal;
+                formData.subMerchantId = subMerchantId;
+                formData.sharePercent = sharePercent;
+            } else {
+                formData.amount = amountVal;
+            }
+
             await fetchUUID(formData);
         }
 
-        async function generateUUID(e) {
-            e.preventDefault();
-
-            const formData = {
-                reference: document.getElementById('reference').value,
-                thumbnail: document.getElementById('thumbnail').value,
-                description: document.getElementById('description').value,
-                url: document.getElementById('url').value,
-                amount: parseFloat(document.getElementById('amount').value),
-                submitToCallBack: 'get', //  submitToCallBack: 'get' or 'post'
-                successMessage: document.getElementById('successMessage').value // Custom success message
-            };
-            await fetchUUID(formData);
-
-        };
+        // Attach event listeners to the generate buttons
+        document.getElementById('generateBtn').addEventListener('click', e => handleGenerate('get', e));
+        document.getElementById('generatePostBtn').addEventListener('click', e => handleGenerate('post', e));
 
         // Event listener for the Check Status button
         document.getElementById('checkStatusBtn').addEventListener('click', async function() {
@@ -244,6 +409,12 @@
                 } else {
                     document.getElementById('statusDisplay').textContent = 'Error checking status: ' + (data.message || JSON.stringify(data));
                 }
+
+                // if (data.status === 'success' && data.response) {
+                //     document.getElementById('statusDisplay').textContent = 'Status: ' + data.response;
+                // } else {
+                //     document.getElementById('statusDisplay').textContent = 'Status: ' + (data.response || 'Unknown status');
+                // }
             } catch (error) {
                 document.getElementById('statusDisplay').textContent = 'Error: ' + error.message;
             } finally {

@@ -4,7 +4,7 @@ export class Dropp {
     constructor(config) {
         this.merchantId = config.merchantId;
         this.environment = config.environment;
-        this.apiBaseUrl = config.apiBaseUrl || 'https://unthink-dropp-payment-prod-314035436999.us-central1.run.app';
+        this.apiBaseUrl = config.apiBaseUrl || 'https://unthink-dropp-payment-stage-314035436999.us-central1.run.app';
     }
 
     async login(options) {

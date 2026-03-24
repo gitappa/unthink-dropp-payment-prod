@@ -46,4 +46,6 @@ export default interface PaymentRequestData {
     acceptPaymentDelay?: boolean;
     noOffers?: boolean;
     submitToCallBack?: 'GET' | 'POST';
+    invoiceType?: 'PREAUTH' | null;
+    authHoldTimeInSeconds?: number;
 }

@@ -3,7 +3,7 @@ import { IncomingMessage, ServerResponse } from 'http';
 import { DroppResponse } from './dropp-sdk-js/dropp-response';
 import { IPromiseToPay } from './dropp-sdk-js/dropp-payloads';
 import { DroppRedemptionData } from './dropp-sdk-js/dropp-redemption-data';
-import { DroppRefundData } from 'dropp-sdk-js/dropp-refund-data';
+import { DroppRefundData } from './dropp-sdk-js/dropp-refund-data';
 import { RecurringPaymentPayload, PreAuthPaymentPayload, RecurringDueData, PreAuthDueData } from "./dropp-sdk-js/dropp-payloads";
 import PaymentRequestData  from './dropp-sdk-js/payment-request-data';
 

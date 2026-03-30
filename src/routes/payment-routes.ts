@@ -2,7 +2,8 @@ import { Router, Request, Response } from 'express';
 import http, { get, IncomingMessage, ServerResponse } from 'http';
 import * as droppSdk from '../../dropp-sdk-js';
 import { IInvoice } from '../../dropp-sdk-js/dropp-payloads';
-import { TransactionService, HederaService, CommonService } from '../middleware/utils';
+import { DroppRedemptionData } from '../../dropp-sdk-js/dropp-redemption-data';
+import { TransactionService, HederaService, CommonService, PaymentCallbackService, CheckoutService } from '../middleware/utils';
 import { getNetworkMembersApi } from '../../network-members';
 import { inspect } from 'util';
 type Res = ServerResponse<IncomingMessage>;
@@ -108,12 +109,10 @@ router.post('/checkout', async (req: Request, res: Response) => {
         platform_distribution_share,
         referrer_1_distribution_share,
         referrer_2_distribution_share,
-        //callbackUrl = `${req.protocol}://${req.get('host')}/api/payments/post-callback-v2`,
-        successUrl, // Client success redirect URL
-        failureUrl, // Client failure redirect URL
+        successUrl,
+        failureUrl,
         title,
         type,
-        //description,
         successMessage,
         purchaseExpiration,
         referralFee,
@@ -123,6 +122,15 @@ router.post('/checkout', async (req: Request, res: Response) => {
         payByCC = true,
         payByBank = true,
       } = req.body;
+      if(!req.body.type){
+        if(platform_distribution_share || referrer_1_distribution_share || referrer_2_distribution_share){
+          type = 'merchant_distribution_payment';
+        }else{
+          type = 'single_payment';
+        }
+      } 
+     
+      //------------------handle distribution and get correct merchant account for single payment flow with referrer details----------------
       if(!req.body.merchantAccount && (req.body.referrer_1_Account || req.body.referrer_2_Account)){
         if(referrer_1_distribution_share && referrer_2_distribution_share){
           platform_distribution_share = 100 - (referrer_1_distribution_share + referrer_2_distribution_share);
@@ -139,133 +147,65 @@ router.post('/checkout', async (req: Request, res: Response) => {
           merchantAccount = req.body.referrer_2_Account;
           referrer_2_Account = '';
           referrer_2_distribution_share = 0;
-        }
-        
+        } 
       }
       //-----------------get correct callback url for single payment or submerchant payment handler------------
       log(`merchantAccount: ${merchantAccount}, referrer_1_Account: ${referrer_1_Account}, referrer_2_Account: ${referrer_2_Account}, platform_distribution_share: ${platform_distribution_share}, referrer_1_distribution_share: ${referrer_1_distribution_share}, referrer_2_distribution_share: ${referrer_2_distribution_share}`);
       var getCallbackUrl_details = await CommonService.getCallbackUrl(req, platform_distribution_share, referrer_1_distribution_share, referrer_2_distribution_share, referrer_1_Account, referrer_2_Account);
       log(`Using callback URL: ${getCallbackUrl_details.callbackUrl}`);
       log(`Using distribution: ${JSON.stringify(getCallbackUrl_details.distribution)}`);
-      //-----------------create Unthink transaction record and get reference(unique id) with received data---------------------------------
-      try {
-        const createResp = await TransactionService.create({
-          merchantAccount: merchantAccount,
-          signingKey: signingKey,
-          //thumbnail: thumbnail,
-          payment_status: 'initiated',
-          createdAt: new Date().toISOString(),
-          //callbackUrl: callbackUrl,
-          successUrl: successUrl,
-          failureUrl: failureUrl,
-          user_id: user_id,
-          amount: amount,
-          currency: currency,
-          service_id: service_id,
-          store_id: store_id,
-          emailId: emailId,
-          payment_method: 'dropp',
-          title: title,
-          type: type,
-          //description: description,
-          successMessage: successMessage
-        });
-
-        if (!createResp.ok) {
-          log('Failed to create transaction in MongoDB.');
-          return returnError(res, 500, 'Failed to create transaction record');
-        }
-        var transaction_details = { data: { data: createResp.data } };
-        var reference = transaction_details.data.data.transaction_id;
-      } catch (dbError) {
-        log(`Failed to save checkout details to MongoDB: ${dbError}`);
-      }
 
       //------------------Construct description with additional details-----------------------
       let buildCustomDescription_details = await CommonService.buildCustomDescription(req, res);
       let description = buildCustomDescription_details.description;
       let additional_details = buildCustomDescription_details.additional_details;
-      log(`Checkout request received for merchant ${merchantAccount}, description:: ${description}  type desc :${typeof(description)} amount: ${amount} ${currency}, reference: ${reference}`);
-      
-      //---------------------construct payment request payload-----------------------
-      let paymentRequestPayload = {
-        merchantAccount: merchantAccount,
-        amount,
-        currency,
-        reference : reference,                       //unique reference of user "user_id|emailId"
-        description: description || '',  //Description of the payment "order_id|<value>" or "collection_id|<value>" or "mfr_code|<product_id>.
-        thumbnail: thumbnail || '',      //URL to a product image.
-        url: getCallbackUrl_details.callbackUrl,
-        title: title || '',  //Title of the payment request.
-        type: type || '',    //Type of the product (e.g., Video, News). "dothelook|usercheckin_1234"
-        purchaseExpiration: purchaseExpiration || undefined,
-        referralFee: referralFee || undefined,
-        referralAccount: referralAccount || undefined,
-        //distribution: getCallbackUrl_details.distribution || "undefined",
-        acceptPaymentDelay: acceptPaymentDelay || false,
-        noOffers: noOffers || false,
-        // Allow the client/server to request fiat on-ramp options when supported by Dropp
-        payByCC: payByCC ,
-        payByBank: payByBank ,
-        successURL: successUrl || "",
-        failureURL: failureUrl || "",
-        successMessage: successMessage,
-        //successCallbackUrl: successCallbackUrl || "",
-        //failureCallbackUrl: failureCallbackUrl || "",
-        submitToCallBack: 'GET' as const // Use POST for callback (more reliable than GET)
+
+      //-----------------Build checkout input using shared service---------------------------------
+      const checkoutInput = {
+        merchantAccount, signingKey, amount, currency, user_id, store_id,
+        emailId, service_id, thumbnail, successUrl, failureUrl, title, type,
+        successMessage, purchaseExpiration, referralFee, referralAccount,
+        acceptPaymentDelay, noOffers, payByCC, payByBank,
+        platform_distribution_share, referrer_1_distribution_share,
+        referrer_2_distribution_share, 
+        callbackUrl: getCallbackUrl_details.callbackUrl,
+        distribution: getCallbackUrl_details.distribution,
+        description, additional_details,
       };
-      if(getCallbackUrl_details.distribution){
-        (paymentRequestPayload as any).distribution = getCallbackUrl_details.distribution;
-      }
-      log(`Payment request payload constructed: ${JSON.stringify(paymentRequestPayload)}`);
-      
-      //----------------Call the Dropp SDK to create a checkout and generate UUID
-      let checkoutId: string | undefined;
-      let qrCodeUrl: string | undefined;
+
+      //-----------------Create transaction record---------------------------------
+      const createTransactionData = CheckoutService.buildTransactionData(checkoutInput);
+      let reference: string;
       try {
-        const droppClient = new droppSdk.DroppClient(process.env.DROPP_ENVIRONMENT!);
-        const uuidResponse = await droppClient.generateUUID(paymentRequestPayload);
-        log(`UUID generated successfully: ${JSON.stringify(uuidResponse)}`);
-        if (uuidResponse.responseCode !== 0) {
-          log(`Failed to generate UUID - responseCode: ${uuidResponse.responseCode}, errors: ${JSON.stringify(uuidResponse.errors)}`);
-          return returnError(res, 500, `Failed to generate checkout UUID - ${uuidResponse.errors?.[0] || 'Unknown error'}`);
-        }
-        if (uuidResponse.responseCode !== 0 || !uuidResponse.data) {
-          log(`Failed to generate UUID: ${JSON.stringify(uuidResponse)}`);
-          return returnError(res, 500, 'Failed to generate checkout UUID');
-        }
-        log(`UUID generated successfully: ${JSON.stringify(uuidResponse.data)}`);
-        checkoutId = uuidResponse.data.uuid;
-        qrCodeUrl = uuidResponse.data.link;
-      } catch (uuidError: any) {
-        log(`Error generating UUID: ${uuidError.message}`);
+        reference = await CheckoutService.createTransaction(createTransactionData);
+      } catch (err: any) {
+        log(`Failed to create transaction: ${err.message}`);
+        return returnError(res, 500, err.message);
       }
 
-      //----------update transaction with payment link and additional details to add the details to mongoDB-------------
+      log(`Checkout request received for merchant ${merchantAccount}, description:: ${description}  type desc :${typeof(description)} amount: ${amount} ${currency}, reference: ${reference}`);
+
+      //---------------------construct payment request payload & generate UUID-----------------------
+      const paymentPayload = CheckoutService.buildPaymentPayload({ ...checkoutInput, reference });
+      log(`Payment request payload constructed: ${JSON.stringify(paymentPayload)}`);
+
+      let checkoutId: string;
+      let qrCodeUrl: string;
       try {
-        const updateResp = await TransactionService.update(reference, {
-          //paymentDetails: paymentRequestPayload,
-          payment_status: 'dropp_checkout_created',
-          createdAt: new Date().toISOString(),
-          payment_link: qrCodeUrl,
-          payment_id: checkoutId,
-          additional_details: additional_details
-        });
-        if (!updateResp.ok) {
-          log('Failed to update checkout details to MongoDB.');
-        }
+        ({ checkoutId, qrCodeUrl } = await CheckoutService.generateCheckoutUUID(paymentPayload));
+      } catch (uuidError: any) {
+        log(`Error generating UUID: ${uuidError.message}`);
+        return returnError(res, 500, uuidError.message);
+      }
+
+      //----------update transaction with checkout details-------------
+      try {
+        await CheckoutService.updateTransactionWithCheckout(reference, checkoutId, qrCodeUrl, additional_details, getCallbackUrl_details.distribution);
       } catch (dbError) {
         log(`Failed to save checkout details to MongoDB: ${dbError}`);
       }
-      //---------------------Build the redirect URL (wallet will redirect to this URL after approval)
-      const redirectUrl = qrCodeUrl || `https://dropp.app.link/checkouts/${checkoutId}?uuid=${checkoutId}`;
-      returnSuccess(res, {
-        checkoutId,
-        redirectUrl,
-        qrCodeUrl,
-        unthink_transactionReference:reference,
-        message: 'Redirect the user to the redirectUrl to complete the payment',
-      });
+
+      returnSuccess(res, CheckoutService.buildCheckoutResponse(checkoutId, qrCodeUrl, reference));
     }else{
       return returnError(res, 400, valid_details.message);
     }
@@ -275,7 +215,109 @@ router.post('/checkout', async (req: Request, res: Response) => {
   }
 });
  
- 
+router.post('/user_checkout', async (req: Request, res: Response) => {
+  log(`Received /user_checkout request process.env.DROPP_MERCHANT_ID ${process.env.DROPP_MERCHANT_ID}`);
+  try {
+    log(`req.protocol: ${req.protocol}, req.get('host'): ${req.get('host')}`);
+    //-------------------Validate required fields------------
+    let valid_details = await CommonService.userCheckoutValidator(req, res);
+    let userMerchantAccount = req.body.userMerchantAccount;
+    let merchantAccount = process.env.DROPP_MERCHANT_ID!;
+    let user_merchant_share = 0;
+    if (valid_details.isValid) {
+      let {
+        amount,
+        currency = 'USD',
+        user_id,
+        store_id,
+        emailId = '',
+        service_id = '',
+        thumbnail,
+        signingKey = process.env.DROPP_MERCHANT_SIGNING_KEY,
+        platform_distribution_share,
+        referrer_1_distribution_share,
+        referrer_2_distribution_share,
+        successUrl,
+        failureUrl,
+        title,
+        type,
+        successMessage,
+        purchaseExpiration,
+        referralFee,
+        referralAccount,
+        acceptPaymentDelay,
+        noOffers,
+        payByCC = true,
+        payByBank = true,
+      } = req.body;
+     
+      if(platform_distribution_share){
+        type = 'platform_distribution_payment';
+        user_merchant_share = 100 - platform_distribution_share;
+      }
+      log(`merchantAccount: ${merchantAccount}, userMerchantAccount: ${userMerchantAccount}, platform_distribution_share: ${platform_distribution_share}, referrer_1_distribution_share: ${referrer_1_distribution_share}, referrer_2_distribution_share: ${referrer_2_distribution_share}, user_merchant_share: ${user_merchant_share}`);
+
+      const callbackUrl = `${req.protocol}://${req.get('host')}/api/payments/post-callback-with-redeem`;
+
+      //------------------Construct description with additional details-----------------------
+      let buildCustomDescription_details = await CommonService.buildCustomDescription(req, res);
+      let description = buildCustomDescription_details.description;
+      let additional_details = buildCustomDescription_details.additional_details;
+
+      //-----------------Build checkout input using shared service---------------------------------
+      const checkoutInput = {
+        merchantAccount, userMerchantAccount, signingKey,
+        amount, currency, user_id, store_id,
+        emailId, service_id, thumbnail, successUrl, failureUrl, title, type,
+        successMessage, purchaseExpiration, referralFee, referralAccount,
+        acceptPaymentDelay, noOffers, payByCC, payByBank,
+        platform_distribution_share, referrer_1_distribution_share,
+        referrer_2_distribution_share, user_merchant_share,
+        callbackUrl,
+        description, additional_details,
+      };
+
+      //-----------------Create transaction record---------------------------------
+      const createTransactionData = CheckoutService.buildTransactionData(checkoutInput);
+      let reference: string;
+      try {
+        reference = await CheckoutService.createTransaction(createTransactionData);
+      } catch (err: any) {
+        log(`Failed to create transaction: ${err.message}`);
+        return returnError(res, 500, err.message);
+      }
+
+      log(`Checkout request received for merchant ${merchantAccount}, description:: ${description}  type desc :${typeof(description)} amount: ${amount} ${currency}, reference: ${reference}`);
+
+      //---------------------construct payment request payload & generate UUID-----------------------
+      const paymentPayload = CheckoutService.buildPaymentPayload({ ...checkoutInput, reference });
+      log(`Payment request payload constructed: ${JSON.stringify(paymentPayload)}`);
+
+      let checkoutId: string;
+      let qrCodeUrl: string;
+      try {
+        ({ checkoutId, qrCodeUrl } = await CheckoutService.generateCheckoutUUID(paymentPayload));
+      } catch (uuidError: any) {
+        log(`Error generating UUID: ${uuidError.message}`);
+        return returnError(res, 500, uuidError.message);
+      }
+
+      //----------update transaction with checkout details-------------
+      try {
+        await CheckoutService.updateTransactionWithCheckout(reference, checkoutId, qrCodeUrl, additional_details);
+      } catch (dbError) {
+        log(`Failed to save checkout details to MongoDB: ${dbError}`);
+      }
+
+      returnSuccess(res, CheckoutService.buildCheckoutResponse(checkoutId, qrCodeUrl, reference));
+    }else{
+      return returnError(res, 400, valid_details.message);
+    }
+  } catch (error: any) {
+    log(`Error in /user_checkout: ${error.message}`);
+    returnError(res, 500, error.message || 'Internal server error');
+  }
+});
 /**
  * POST /api/payments/post-callback
  * 
@@ -433,160 +475,235 @@ router.get('/post-callback-v1', async(req: Request, res: Response) => {
   try {
     const p2pParam = req.query.p2p as string;
 
-    if (!p2pParam) {
-      return returnError(res, 400, 'Missing p2p query parameter');
-    }
-
-    // Parse the p2p JSON string
-    let p2pObj: droppSdk.IPromiseToPay;
+    //-------- Parse & decode p2p + invoice using shared util --------
+    let parsed;
     try {
-      p2pObj = JSON.parse(p2pParam);
-    } catch (parseError: any) {
-      return returnError(res, 400, `Invalid p2p JSON: ${parseError.message}`);
+      parsed = PaymentCallbackService.parseCallbackQuery(p2pParam);
+    } catch (parseErr: any) {
+      return returnError(res, parseErr.statusCode || 400, parseErr.message);
     }
-    log(`p2p object parsed successfully :: ${JSON.stringify(p2pObj)}`);
-    log(`GET callback received from payer: ${p2pObj.payer}`);
+    const { p2pObj, invoiceData, checkoutId, merchantId } = parsed;
 
-    // Decode and process payment (same as POST callback)
-    let invoiceData: IInvoice;
-    try {
-      invoiceData = JSON.parse(Buffer.from(p2pObj.invoiceBytes, 'base64').toString());
-    } catch (decodeError: any) {
-      return returnError(res, 400, 'Invalid invoiceBytes encoding');
-    }
-    log(`Invoice decoded: ${JSON.stringify(invoiceData)}`);
     log(`Distribution in invoiceData: ${JSON.stringify(invoiceData.distribution)}`);
     log(`DistributionBytes in p2pObj: ${p2pObj.distributionBytes}`);
-    log(`Payment details: ${invoiceData.currency} ${invoiceData.amount}, from ${p2pObj.payer} to ${invoiceData.merchantAccount} transaction_id: ${invoiceData.reference}  `);
 
-    const merchantId = invoiceData.merchantAccount;
-    const checkoutId = invoiceData.qrCodeUUID || (p2pObj as any).checkoutId;
-    
+    //-------- Mark payment_received and retrieve stored URLs / keys --------
+    const { successUrl, failureUrl, signingKey } = await PaymentCallbackService.markPaymentReceived(
+      invoiceData.reference, p2pObj, invoiceData
+    );
 
-    let successUrl = '';
-    let failureUrl = '';
-    let signingKey = process.env.DROPP_MERCHANT_SIGNING_KEY;
+    //-------- Submit payment via shared util --------
     try {
-      const updateResp = await TransactionService.update(invoiceData.reference, {
-        p2pData: p2pObj,
-        invoiceData: invoiceData,
-        payment_status: 'payment_received',
-      });
-      if (updateResp.ok) {
-        successUrl = updateResp.successUrl || '';
-        failureUrl = updateResp.failureUrl || '';
-        signingKey = updateResp.signingKey || signingKey; 
-      } else {
-        log('Failed to update checkout details to MongoDB.');
-      }
-    } catch (dbError) {
-      log(`Failed to save payment_received details to MongoDB: ${dbError}`);
-    }
+      const result = await PaymentCallbackService.submitPayment(p2pObj, signingKey);
 
-    const droppClient = new droppSdk.DroppClient(process.env.DROPP_ENVIRONMENT!);
-    //const signingKey = process.env.DROPP_MERCHANT_SIGNING_KEY!;
-    log(`Using signing key: ${signingKey}`);
-    new droppSdk.DroppPaymentRequest(droppClient)
-      .submit(p2pObj, signingKey)
-      .then(async (paymentResponse: droppSdk.DroppResponse) => {
-        log(`Payment submitted successfully. Response: ${JSON.stringify(paymentResponse)}`);
+      //-------- Update transaction in MongoDB --------
+      await PaymentCallbackService.updateTransactionAfterPayment(invoiceData.reference, result);
 
-        // Extract Hedera transaction ID (format: 0.0.XXXXX@171234567890)
-        const hederaTxId = HederaService.extractTransactionId(p2pObj, paymentResponse);
-        if (hederaTxId) {
-          log(`Hedera Transaction ID: ${hederaTxId}`);
-        }
+      const redirectUrl = result.isSuccess ? successUrl : failureUrl;
 
-        /*
-        if (checkoutId && checkoutStore[merchantId] && checkoutStore[merchantId][checkoutId]) {
-          checkoutStore[merchantId][checkoutId].status = 'completed';
-          checkoutStore[merchantId][checkoutId].paymentResponse = paymentResponse;
-        }
-        */
-        
-        const isSuccess = paymentResponse.responseCode === 0;
-        const redirectUrl = isSuccess ? successUrl : failureUrl;
-        const paymentRef = paymentResponse?.data?.paymentRef || (paymentResponse as any)?.paymentRef || '';
-        const transactionReference = paymentResponse?.data?.transactionReference || (paymentResponse as any)?.transactionReference || '';
-
-        if (isSuccess){
-          try {
-            const updateResp = await TransactionService.update(invoiceData.reference, {
-              payment_status: 'completed',
-              paymentResponse: paymentResponse,
-              hederaTransactionId: hederaTxId,
-            });
-            if (updateResp.ok) {
-              log('updated checkout complete to MongoDB.');
-            }
-          } catch (dbError) {
-            log(`Failed to save payment_received details to MongoDB: ${dbError}`);
-          }
-        }
-       
-        if (redirectUrl) {
-          const redirectUrlWithParams = new URL(redirectUrl);
-          redirectUrlWithParams.searchParams.append('checkoutId', checkoutId);
-          redirectUrlWithParams.searchParams.append('status', isSuccess ? 'success' : 'failed');
-          redirectUrlWithParams.searchParams.append('reference', invoiceData.reference);
-          redirectUrlWithParams.searchParams.append('amount', invoiceData.amount.toString());
-          redirectUrlWithParams.searchParams.append('currency', invoiceData.currency);
-          redirectUrlWithParams.searchParams.append('payer', p2pObj.payer);
-          if (paymentRef) redirectUrlWithParams.searchParams.append('paymentRef', paymentRef);
-          if (transactionReference) redirectUrlWithParams.searchParams.append('transactionReference', transactionReference);
-          if (hederaTxId) {
-            redirectUrlWithParams.searchParams.append('hederaTransactionId', hederaTxId);
-          }
-
-          log(`Redirecting to ${isSuccess ? 'success' : 'failure'} callback URL: ${redirectUrlWithParams.toString()}`);
-          return res.redirect(redirectUrlWithParams.toString());
-        }
-
-        returnSuccess(res, {
-          paymentStatus: paymentResponse.responseCode === 0 ? 'success' : 'failed',
-          paymentResponse,
-          invoiceData,
+      if (redirectUrl) {
+        const fullUrl = PaymentCallbackService.buildRedirectUrl(redirectUrl, {
           checkoutId,
-          hederaTransactionId: hederaTxId || null,
+          isSuccess: result.isSuccess,
+          reference: invoiceData.reference,
+          amount: invoiceData.amount,
+          currency: invoiceData.currency,
+          payer: p2pObj.payer,
+          paymentRef: result.paymentRef,
+          transactionReference: result.transactionReference,
+          hederaTxId: result.hederaTxId,
+          receiptURL: result.receiptURL,
         });
-      })
-      .catch(async (paymentError: any) => {
-        const errorMessage = getErrorMessage(paymentError);
-        const errorPayload = paymentError?.response?.data || paymentError?.data || paymentError;
+        log(`Redirecting to ${result.isSuccess ? 'success' : 'failure'} callback URL: ${fullUrl}`);
+        return res.redirect(fullUrl);
+      }
 
-        log(`Payment submission failed (message): ${errorMessage}`);
-        log(`Payment submission failed (payload): ${formatError(errorPayload)}`);
-
-        if (failureUrl) {
-          try {
-            const updateResp = await TransactionService.update(invoiceData.reference, {
-              payment_status: 'failed',
-              paymentResponse: errorPayload,
-            });
-            if (updateResp.ok) {
-              log('updated checkout complete to MongoDB.');
-            }
-          } catch (dbError) {
-            log(`Failed to save payment_received details to MongoDB: ${dbError}`);
-          }
-          const redirectUrl = new URL(failureUrl);
-          redirectUrl.searchParams.append('checkoutId', checkoutId);
-          redirectUrl.searchParams.append('status', 'failed');
-          redirectUrl.searchParams.append('reference', invoiceData.reference);
-          redirectUrl.searchParams.append('error', errorMessage);
-
-          log(`Redirecting to failure callback URL: ${redirectUrl.toString()}`);
-          return res.redirect(redirectUrl.toString());
-        }
-
-        returnError(res, 500, `Payment processing failed: ${errorMessage}`);
+      returnSuccess(res, {
+        paymentStatus: result.isSuccess ? 'success' : 'failed',
+        paymentResponse: result.paymentResponse,
+        invoiceData,
+        checkoutId,
+        hederaTransactionId: result.hederaTxId || null,
+        receiptURL: result.receiptURL || null,
       });
+    } catch (paymentError: any) {
+      const errorMessage = getErrorMessage(paymentError);
+      log(`Payment submission failed: ${formatError(paymentError)}`);
+
+      await PaymentCallbackService.updateTransactionOnError(invoiceData.reference, paymentError);
+
+      if (failureUrl) {
+        const fullUrl = PaymentCallbackService.buildRedirectUrl(failureUrl, {
+          checkoutId,
+          isSuccess: false,
+          reference: invoiceData.reference,
+          amount: invoiceData.amount,
+          currency: invoiceData.currency,
+          payer: p2pObj.payer,
+          errorMessage,
+        });
+        log(`Redirecting to failure callback URL: ${fullUrl}`);
+        return res.redirect(fullUrl);
+      }
+
+      returnError(res, 500, `Payment processing failed: ${errorMessage}`);
+    }
   } catch (error: any) {
     log(`Error in /callback: ${error.message}`);
     returnError(res, 500, error.message || 'Internal server error');
   }
 });
 
+
+/**
+ * GET /api/payments/post-callback-with-redeem
+ *
+ * Same flow as post-callback-v1, but after a successful payment to the platform,
+ * automatically redeems (credit-pays) the user merchant's distribution share
+ * to their wallet.
+ *
+ * Used when type = 'platform_distribution_payment': the payer pays 100 % to the
+ * platform merchant, then this handler pays the user merchant their share
+ * via DroppCreditPaymentRequest.
+ *
+ * Query Parameter:
+ * ?p2p=<url-encoded JSON string of P2P object>
+ */
+router.get('/post-callback-with-redeem', async (req: Request, res: Response) => {
+  try {
+    const p2pParam = req.query.p2p as string;
+
+    //-------- Parse & decode p2p + invoice using shared util --------
+    let parsed: any
+    try {
+      parsed = PaymentCallbackService.parseCallbackQuery(p2pParam);
+    } catch (parseErr: any) {
+      return returnError(res, parseErr.statusCode || 400, parseErr.message);
+    }
+    const { p2pObj, invoiceData, checkoutId, merchantId } = parsed;
+
+    log(`[post-callback-with-redeem] Distribution in invoiceData: ${JSON.stringify(invoiceData.distribution)}`);
+
+    //-------- Mark payment_received and retrieve stored URLs / keys / user share --------
+    const {
+      successUrl,
+      failureUrl,
+      signingKey,
+      user_merchant_share,
+      userMerchantAccount,
+      user_id,
+      service_id,
+      store_id,
+      emailId,
+      title,
+      description,
+
+    } = await PaymentCallbackService.markPaymentReceived(
+      invoiceData.reference, p2pObj, invoiceData
+    );
+
+    //-------- Submit the primary payment to the platform merchant --------
+    try {
+      const result = await PaymentCallbackService.submitPayment(p2pObj, signingKey);
+
+      //-------- Update main transaction in MongoDB --------
+      await PaymentCallbackService.updateTransactionAfterPayment(invoiceData.reference, result);
+      log(`[post-callback-with-redeem] Payment submission result: ${JSON.stringify(result)}`);
+
+      //-------- If payment succeeded, redeem user's share --------
+      let redeemResult: { success: boolean; redeemResponse?: any; error?: string } | null = null;
+
+      if (result.isSuccess && user_merchant_share > 0 && userMerchantAccount) {
+        const userAmount = Number(((Number(invoiceData.amount) * user_merchant_share) / 100).toFixed(4));
+        log(`[post-callback-with-redeem] Initiating redeem payout: ${user_merchant_share}% of ${invoiceData.amount} ${invoiceData.currency} → ${userAmount} to ${userMerchantAccount}`);
+
+        redeemResult = await PaymentCallbackService.processRedeem({
+          userMerchantAccount: userMerchantAccount,
+          amount: userAmount,
+          currency: invoiceData.currency,
+          creditReference: `Payout for ${invoiceData.reference}`,
+          meta: {
+            type: 'user_payout',
+            user_id,
+            service_id,
+            store_id,
+            emailId,
+            title,
+            description,
+          },
+        });
+
+        // Update main transaction with redeem status
+        try {
+          await TransactionService.update(invoiceData.reference, {
+            redeem_status: redeemResult.success ? 'completed' : 'failed',
+            redeem_response: redeemResult.redeemResponse || redeemResult.error,
+            user_merchant_share,
+            userMerchantAccount,      
+          });
+        } catch (dbError) {
+          log(`Failed to update redeem status in MongoDB: ${dbError}`);
+        }
+      } else if (result.isSuccess) {
+        log(`[post-callback-with-redeem] No user redeem needed (share: ${user_merchant_share}, account: ${userMerchantAccount})`);
+      }
+
+      //-------- Redirect or respond --------
+      const redirectUrl = result.isSuccess ? successUrl : failureUrl;
+
+      if (redirectUrl) {
+        const fullUrl = PaymentCallbackService.buildRedirectUrl(redirectUrl, {
+          checkoutId,
+          isSuccess: result.isSuccess,
+          reference: invoiceData.reference,
+          amount: invoiceData.amount,
+          currency: invoiceData.currency,
+          payer: p2pObj.payer,
+          paymentRef: result.paymentRef,
+          transactionReference: result.transactionReference,
+          hederaTxId: result.hederaTxId,
+          receiptURL: result.receiptURL,
+        });
+        log(`Redirecting to ${result.isSuccess ? 'success' : 'failure'} callback URL: ${fullUrl}`);
+        return res.redirect(fullUrl);
+      }
+
+      returnSuccess(res, {
+        paymentStatus: result.isSuccess ? 'success' : 'failed',
+        paymentResponse: result.paymentResponse,
+        invoiceData,
+        checkoutId,
+        hederaTransactionId: result.hederaTxId || null,
+        receiptURL: result.receiptURL || null,
+        redeemPayout: redeemResult || null,
+      });
+    } catch (paymentError: any) {
+      const errorMessage = getErrorMessage(paymentError);
+      log(`[post-callback-with-redeem] Payment submission failed: ${formatError(paymentError)}`);
+
+      await PaymentCallbackService.updateTransactionOnError(invoiceData.reference, paymentError);
+
+      if (failureUrl) {
+        const fullUrl = PaymentCallbackService.buildRedirectUrl(failureUrl, {
+          checkoutId,
+          isSuccess: false,
+          reference: invoiceData.reference,
+          amount: invoiceData.amount,
+          currency: invoiceData.currency,
+          payer: p2pObj.payer,
+          errorMessage,
+        });
+        log(`Redirecting to failure callback URL: ${fullUrl}`);
+        return res.redirect(fullUrl);
+      }
+
+      returnError(res, 500, `Payment processing failed: ${errorMessage}`);
+    }
+  } catch (error: any) {
+    log(`Error in /post-callback-with-redeem: ${error.message}`);
+    returnError(res, 500, error.message || 'Internal server error');
+  }
+});
 
 
 /**
@@ -603,176 +720,94 @@ router.get('/post-callback-v2', async(req: Request, res: Response) => {
   try {
     const p2pParam = req.query.p2p as string;
 
-    if (!p2pParam) {
-      return returnError(res, 400, 'Missing p2p query parameter');
-    }
-
-    // Parse the p2p JSON string
-    let p2pObj: droppSdk.IPromiseToPay;
+    //-------- Parse & decode p2p + invoice using shared util --------
+    let parsed;
     try {
-      p2pObj = JSON.parse(p2pParam);
-    } catch (parseError: any) {
-      return returnError(res, 400, `Invalid p2p JSON: ${parseError.message}`);
+      parsed = PaymentCallbackService.parseCallbackQuery(p2pParam);
+    } catch (parseErr: any) {
+      return returnError(res, parseErr.statusCode || 400, parseErr.message);
     }
-    log(`p2p object parsed successfully :: ${JSON.stringify(p2pObj)}`);
-    log(`GET callback1 received from payer: ${p2pObj.payer}`);
+    const { p2pObj, invoiceData, checkoutId, merchantId } = parsed;
 
-    // Decode and process payment (same as POST callback)
-    let invoiceData: IInvoice;
-    try {
-      invoiceData = JSON.parse(Buffer.from(p2pObj.invoiceBytes, 'base64').toString());
-    } catch (decodeError: any) {
-      return returnError(res, 400, 'Invalid invoiceBytes encoding');
-    }
-    log(`Invoice decoded: ${JSON.stringify(invoiceData)}`);
     log(`Distribution in invoiceData: ${JSON.stringify(invoiceData.distribution)}`);
     log(`DistributionBytes in p2pObj: ${p2pObj.distributionBytes}`);
-    log(`Payment details: ${invoiceData.currency} ${invoiceData.amount}, from ${p2pObj.payer} to ${invoiceData.merchantAccount} transaction_id: ${invoiceData.reference}  `);
 
-    const merchantId = invoiceData.merchantAccount;
-    const checkoutId = invoiceData.qrCodeUUID || (p2pObj as any).checkoutId;
+    //-------- Mark payment_received and retrieve stored URLs / keys --------
+    const { successUrl, failureUrl, signingKey } = await PaymentCallbackService.markPaymentReceived(
+      invoiceData.reference, p2pObj, invoiceData
+    );
 
-    let successUrl = '';
-    let failureUrl = '';
-    let signingKey = process.env.DROPP_MERCHANT_SIGNING_KEY;
+    //-------- Submit payment (with sub-merchant distribution support) --------
     try {
-      const updateResp = await TransactionService.update(invoiceData.reference, {
-        p2pData: p2pObj,
-        invoiceData: invoiceData,
-        payment_status: 'payment_received',
-      });
-      if (updateResp.ok) {
-        successUrl = updateResp.successUrl || '';
-        failureUrl = updateResp.failureUrl || '';
-        signingKey = updateResp.signingKey || signingKey; 
-      } else {
-        log('Failed to update checkout details to MongoDB.');
-      }
-    } catch (dbError) {
-      log(`Failed to save payment_received details to MongoDB: ${dbError}`);
-    }
+      const result = await PaymentCallbackService.submitPaymentWithDistribution(p2pObj, signingKey, invoiceData);
 
-    const droppClient = new droppSdk.DroppClient(process.env.DROPP_ENVIRONMENT!);
-    log(`Using signing key: ${signingKey}`);
+      //-------- Update transaction in MongoDB --------
+      await PaymentCallbackService.updateTransactionAfterPayment(invoiceData.reference, result);
 
-    // Check if this is a sub-merchant payment (has distribution data)
-    const isSubMerchantPayment = invoiceData.distribution || p2pObj.distributionBytes;
-    const parentMerchantId = process.env.DROPP_PARENT_MERCHANT_ID || process.env.DROPP_MERCHANT_ID!;
+      const redirectUrl = result.isSuccess ? successUrl : failureUrl;
 
-    let paymentPromise: Promise<droppSdk.DroppResponse>;
-    if (Object.keys(isSubMerchantPayment).length > 0) {
-      log(`Submitting sub-merchant payment for parent merchant: ${parentMerchantId}`);
-      paymentPromise = new droppSdk.DroppPaymentRequest(droppClient)
-        .submitForSubMerchant(p2pObj, signingKey, parentMerchantId);
-    } else {
-      log(`Submitting regular merchant payment`);
-      paymentPromise = new droppSdk.DroppPaymentRequest(droppClient)
-        .submit(p2pObj, signingKey);
-    }
-
-    paymentPromise
-      .then(async (paymentResponse: droppSdk.DroppResponse) => {
-        log(`Payment submitted successfully. Response: ${JSON.stringify(paymentResponse)}`);
-
-        // Extract Hedera transaction ID (format: 0.0.XXXXX@171234567890)
-        const hederaTxId = HederaService.extractTransactionId(p2pObj, paymentResponse);
-        if (hederaTxId) {
-          log(`Hedera Transaction ID: ${hederaTxId}`);
-        }
-
-        const isSuccess = paymentResponse.responseCode === 0;
-        const redirectUrl = isSuccess ? successUrl : failureUrl;
-        const paymentRef = paymentResponse?.data?.paymentRef || (paymentResponse as any)?.paymentRef || '';
-        const transactionReference = paymentResponse?.data?.transactionReference || (paymentResponse as any)?.transactionReference || '';
-
-        if (isSuccess){
-          try {
-            const updateResp = await TransactionService.update(invoiceData.reference, {
-              payment_status: 'completed',
-              paymentResponse: paymentResponse,
-              hederaTransactionId: hederaTxId,
-            });
-            if (updateResp.ok) {
-              log('updated checkout complete to MongoDB.');
-            }
-          } catch (dbError) {
-            log(`Failed to save payment_completed details to MongoDB: ${dbError}`);
-          }
-        }
-       
-        if (redirectUrl) {
-          const redirectUrlWithParams = new URL(redirectUrl);
-          redirectUrlWithParams.searchParams.append('checkoutId', checkoutId);
-          redirectUrlWithParams.searchParams.append('status', isSuccess ? 'success' : 'failed');
-          redirectUrlWithParams.searchParams.append('reference', invoiceData.reference);
-          redirectUrlWithParams.searchParams.append('amount', invoiceData.amount.toString());
-          redirectUrlWithParams.searchParams.append('currency', invoiceData.currency);
-          redirectUrlWithParams.searchParams.append('payer', p2pObj.payer);
-          if (paymentRef) redirectUrlWithParams.searchParams.append('paymentRef', paymentRef);
-          if (transactionReference) redirectUrlWithParams.searchParams.append('transactionReference', transactionReference);
-          if (hederaTxId) {
-            redirectUrlWithParams.searchParams.append('hederaTransactionId', hederaTxId);
-          }
-
-          log(`Redirecting to ${isSuccess ? 'success' : 'failure'} callback URL: ${redirectUrlWithParams.toString()}`);
-          return res.redirect(redirectUrlWithParams.toString());
-        }
-
-        returnSuccess(res, {
-          paymentStatus: paymentResponse.responseCode === 0 ? 'success' : 'failed',
-          paymentResponse,
-          invoiceData,
+      if (redirectUrl) {
+        const fullUrl = PaymentCallbackService.buildRedirectUrl(redirectUrl, {
           checkoutId,
-          hederaTransactionId: hederaTxId || null,
+          isSuccess: result.isSuccess,
+          reference: invoiceData.reference,
+          amount: invoiceData.amount,
+          currency: invoiceData.currency,
+          payer: p2pObj.payer,
+          paymentRef: result.paymentRef,
+          transactionReference: result.transactionReference,
+          hederaTxId: result.hederaTxId,
+          receiptURL: result.receiptURL,
         });
-      })
-      .catch(async (paymentError: any) => {
-        const errorMessage = getErrorMessage(paymentError);
-        const errorPayload = paymentError?.response?.data || paymentError?.data || paymentError;
+        log(`Redirecting to ${result.isSuccess ? 'success' : 'failure'} callback URL: ${fullUrl}`);
+        return res.redirect(fullUrl);
+      }
 
-        log(`Payment submission failed (message): ${errorMessage}`);
-        log(`Payment submission failed (payload): ${formatError(errorPayload)}`);
-
-        if (failureUrl) {
-          try {
-            const updateResp = await TransactionService.update(invoiceData.reference, {
-              payment_status: 'failed',
-              paymentResponse: errorPayload,
-            });
-            if (updateResp.ok) {
-              log('updated checkout complete to MongoDB.');
-            }
-          } catch (dbError) {
-            log(`Failed to save payment_received details to MongoDB: ${dbError}`);
-          }
-          const redirectUrl = new URL(failureUrl);
-          redirectUrl.searchParams.append('checkoutId', checkoutId);
-          redirectUrl.searchParams.append('status', 'failed');
-          redirectUrl.searchParams.append('reference', invoiceData.reference);
-          redirectUrl.searchParams.append('error', errorMessage);
-
-          log(`Redirecting to failure callback URL: ${redirectUrl.toString()}`);
-          return res.redirect(redirectUrl.toString());
-        }
-
-        returnError(res, 500, `Payment processing failed: ${errorMessage}`);
+      returnSuccess(res, {
+        paymentStatus: result.isSuccess ? 'success' : 'failed',
+        paymentResponse: result.paymentResponse,
+        invoiceData,
+        checkoutId,
+        hederaTransactionId: result.hederaTxId || null,
+        receiptURL: result.receiptURL || null,
       });
+    } catch (paymentError: any) {
+      const errorMessage = getErrorMessage(paymentError);
+      log(`Payment submission failed: ${formatError(paymentError)}`);
+
+      await PaymentCallbackService.updateTransactionOnError(invoiceData.reference, paymentError);
+
+      if (failureUrl) {
+        const fullUrl = PaymentCallbackService.buildRedirectUrl(failureUrl, {
+          checkoutId,
+          isSuccess: false,
+          reference: invoiceData.reference,
+          amount: invoiceData.amount,
+          currency: invoiceData.currency,
+          payer: p2pObj.payer,
+          errorMessage,
+        });
+        log(`Redirecting to failure callback URL: ${fullUrl}`);
+        return res.redirect(fullUrl);
+      }
+
+      returnError(res, 500, `Payment processing failed: ${errorMessage}`);
+    }
   } catch (error: any) {
-    log(`Error in /post-callback1: ${error.message}`);
+    log(`Error in /post-callback-v2: ${error.message}`);
     returnError(res, 500, error.message || 'Internal server error');
   }
 });
 
 
-// GET /api/payments/network-members
-//
-// Fetch network members for a merchant within a time range. Query parameters:
-//   from (string, timestamp) - start of range (required)
-//   to   (string, timestamp) - end of range (required)
-//   offset (number, optional)
-//   limit  (number, optional, max 100)
-//
-// Response mirrors the Dropp SDK result.
+/*
+  GET /api/payments/network-members
+  // Fetch network members for a merchant within a time range. Query parameters:
+  //   from (string, timestamp) - start of range (required)
+  //   to   (string, timestamp) - end of range (required)
+  //   offset (number, optional)
+  //   limit  (number, optional, max 100)
+  */
 router.get('/network-members', async (req: Request, res: Response) => {
   try {
     // Extract and normalize query values; convert numeric timestamps or loose strings to ISO
@@ -1138,6 +1173,61 @@ router.post('/get-authorize-url', async (req: Request, res: Response) => {
   }
 });
 
+
+/**
+ * POST /api/payments/redeem
+ * 
+ * Redeem credits to a user's wallet. Reference: index.ts processRedemption.
+ * 
+ * Request Body:
+ * {
+ *   "userMerchantAccount": "0.0.XXXXXX",
+ *   "amount": 1.00,
+ *   "currency": "USD",            (optional, defaults to "USD")
+ *   "creditReference": "reason"    (optional, defaults to "Credit redemption")
+ * }
+ * 
+ * Response:
+ * {
+ *   "success": true,
+ *   "paymentResponse": {...DroppResponse}
+ * }
+ */
+router.post('/redeem', async (req: Request, res: Response) => {
+  try {
+    const { userMerchantAccount, amount, currency, creditReference, user_id, emailId, store_id, service_id, title, description } = req.body;
+
+    if (!userMerchantAccount || amount === undefined || amount === null || amount === '') {
+      return returnError(res, 400, 'Missing required fields: userMerchantAccount, amount');
+    }
+
+    const result = await PaymentCallbackService.processRedeem({
+      userMerchantAccount,
+      amount: Number(amount),
+      currency,
+      creditReference,
+      ipAddress: req.ip || '127.0.0.1',
+      meta: {
+        user_id: user_id || userMerchantAccount,
+        service_id: service_id || '',
+        store_id: store_id || '',
+        emailId: emailId || '',
+        type: 'redeem',
+        title : title ,
+        description : description,
+      },
+    });
+
+    if (result.success) {
+      returnSuccess(res, { paymentResponse: result.redeemResponse, unthink_transactionReference: result.reference });
+    } else {
+      returnError(res, 500, result.error || 'Redeem failed');
+    }
+  } catch (error: any) {
+    log(`Error in /redeem: ${error.message}`);
+    returnError(res, 500, error.message || 'Internal server error');
+  }
+});
 
 
 const activeSessions = new Map<string, any>();
